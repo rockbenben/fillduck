@@ -1,0 +1,10 @@
+node_modules/
+gui/web/node_modules/
+.gstack/
+# Playwright 登录态（含 cookie，别提交）
+.auth-profile/
+# 个人配置与文案（含你的后台 URL / 文案 / 搜索词，别提交）
+config.json
+descriptions.json
+search-terms.json
+copy.json
