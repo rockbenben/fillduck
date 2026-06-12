@@ -1,6 +1,5 @@
 {
   "chromeEditUrl": "https://chrome.google.com/webstore/devconsole/<你的账号id>/<扩展id>/edit",
   "edgeListingsUrl": "https://partner.microsoft.com/zh-cn/dashboard/microsoftedge/<扩展id>/listings",
-  "descriptionsPath": "descriptions.json",
-  "termsPath": "search-terms.json"
+  "firefoxEditUrl": "https://addons.mozilla.org/zh-CN/developers/addon/<附加组件名>/edit"
 }

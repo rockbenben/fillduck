@@ -2,15 +2,15 @@
 
 [中文](README.md) · **English**
 
-> 365 Open Source Plan #13 · One local multilingual file, bulk-filled into the store descriptions and search terms of the Chrome Web Store and Edge Add-ons dashboards.
+> 365 Open Source Plan #13 · One local multilingual file, bulk-filled into the store descriptions and search terms of the Chrome / Edge / Firefox extension dashboards.
 
-> One local multilingual JSON, auto-filled into the **descriptions** and **search terms** of the Chrome Web Store and Edge Add-ons dashboards. **Runs locally · bilingual · drafts only — you stay in control of publishing.**
+> One local multilingual JSON, auto-filled into the **descriptions** and **search terms** of the Chrome Web Store, Edge Add-ons, and Firefox Add-ons (AMO) dashboards. **Runs locally · bilingual · drafts only — you stay in control of publishing.**
 
 You publish an extension in 15–20+ languages and dread re-pasting every description / search term by hand on each update. FillDuck drives **your own real browser** (your login, your machine — nothing is uploaded) to open each language, type the text in, and save a draft. You review everything and submit yourself.
 
 ## Screenshots
 
-One screen: paste your two dashboard URLs + multilingual JSON → pick a target → Start → watch the live log. The UI toggles between 中 / English.
+One screen: paste your dashboard URLs + multilingual JSON → check what to fill → Start → watch the live log. The UI toggles between 中 / English.
 
 ![FillDuck console](docs/images/console-en.png)
 
@@ -24,9 +24,11 @@ One screen: paste your two dashboard URLs + multilingual JSON → pick a target 
 | --- | --- | --- |
 | **Chrome Web Store** | switches the language dropdown per locale, fills the description | clicks **Save draft** once after all languages |
 | **Edge Add-ons** (Partner Center) | fills description + search terms per language, saves each draft | re-opens each to verify, retries failures (up to 3 rounds) |
+| **Firefox Add-ons** (AMO) | all languages live in one form — filled and saved in a single submit | reads back after saving, up to 3 rounds |
 
-- **Descriptions**: both dashboards.
-- **Search terms**: Edge only (the Chrome Web Store has no such field); one set per language, rules below.
+- **Descriptions**: all three dashboards (AMO caps each language at 15,000 characters).
+- **Search terms**: Edge only (Chrome / AMO have no such field); one set per language, rules below.
+- **Note**: AMO description edits are not drafts — saving takes effect directly (no re-review is triggered); Chrome / Edge still write drafts only.
 
 The UI and dashboards are **bilingual (中 / English)**: the console auto-detects your browser language (with a toggle); the dashboards are auto-detected (zh/en) with English fallback for any other language — your account's language setting is never changed.
 
@@ -35,11 +37,17 @@ The UI and dashboards are **bilingual (中 / English)**: the console auto-detect
 1. Install [Node.js](https://nodejs.org/) (skip if already installed).
 2. Start the console: double-click `start.bat` (Windows) or run `./start.sh` (macOS/Linux). First run installs deps and opens http://localhost:4599.
 3. In the console:
-   - Paste your two dashboard URLs (Chrome's `…/edit`, Edge's `…/listings`) + your descriptions JSON (optionally search-terms JSON too), click **Save**.
-   - Click **Log in** → sign into Google / Microsoft in the browser window (once; remembered after).
-   - Click **Start** (Chrome / Edge / All) → watch the live log → review in the browser → submit yourself.
+   - Paste your dashboard URLs (Chrome's `…/edit`, Edge's `…/listings`, Firefox's `…/developers/addon/<slug>/edit` — at least one) + your descriptions JSON (optionally search-terms JSON too), click **Save**.
+   - Click **Log in** → sign into Google / Microsoft / Mozilla in the browser window (once; remembered after).
+   - **Check what to fill** (Chrome desc / Edge desc / Edge terms / Firefox desc — multi-select; items missing a URL or content are greyed out) → click **Start** → watch the live log → review in the browser → submit yourself.
 
 > Use the **中 / EN** toggle (top-right) to switch the interface language (remembered). The live run-log is backend-generated and currently Chinese only.
+
+## Multiple projects
+
+Maintaining more than one extension? The console's top row lets you create / switch / rename / delete projects — each project keeps its own three dashboard URLs and two copy JSON files (stored under `projects/<name>/`, git-ignored). On first launch after upgrading, your existing URLs and copy are migrated to `projects/default/` automatically.
+
+The CLI supports it too: `node playwright/run.mjs --store all --project <name>` (defaults to the project currently selected in the console).
 
 ## Description format (`descriptions.json`)
 
@@ -53,7 +61,7 @@ Keys are locale codes (underscore or hyphen, case-insensitive); values are the f
 }
 ```
 
-- Not sure how to write it? Click **Load sample** in the console for an editable template, or copy `descriptions.example.json` from the repo.
+- Not sure how to write it? Click **Load sample** in the console for an editable template, or copy `descriptions.example.json` from the repo. You can also hand the prompt in [`store-copy-prompt.md`](store-copy-prompt.md) to an AI assistant to generate both compliant files from your extension project in one go.
 - For a line break inside a description, write `\n` (a JSON string can't contain a raw newline).
 - On the dashboard but missing from your copy → skipped (with a note); extra languages in your copy → ignored.
 - **Edge requires ≥250 characters per description**; shorter ones are skipped with a note.
@@ -75,7 +83,7 @@ Keys are locale codes; values are an **array** of search terms for that language
 - A language with an empty array `[]` is **skipped — its existing terms are left untouched**. The console also has Load sample / Import file / Clear.
 - This file is **optional**: fill descriptions only, terms only, or both.
 
-> `config.json` (URLs), `descriptions.json`, and `search-terms.json` are git-ignored — never committed.
+> All URLs and copy live under `projects/` (plus the root `config.json`) — git-ignored, never committed.
 
 ## FAQ
 
@@ -87,17 +95,19 @@ Keys are locale codes; values are an **array** of search terms for that language
 ## Command line (optional)
 
 ```bash
-npm run login    # first-time login (opens both dashboards; Ctrl+C when done)
+npm run login    # first-time login (opens the dashboards; Ctrl+C when done)
 npm run chrome   # Chrome only
 npm run edge     # Edge only
-npm run all      # both
+npm run firefox  # Firefox (AMO) only
+npm run all      # all of them
+# pick a project: node playwright/run.mjs --store all --project <name>
 ```
 
 ## Layout & extending
 
-- `playwright/` — fill logic (`fill-chrome.mjs` description, `fill-edge.mjs` description, `fill-edge-terms.mjs` search terms)
+- `playwright/` — fill logic (`fill-chrome.mjs` / `fill-edge.mjs` / `fill-firefox.mjs` descriptions, `fill-edge-terms.mjs` search terms)
 - `gui/` — local console (`gui/server.mjs`; front-end React + antd in `gui/web/src`)
-- `src/` — shared pure logic: `core.mjs` (parse / queue / URL lang / search-term cleaning, unit-tested), `selectors.mjs` (selectors + bilingual name tables)
+- `src/` — shared pure logic: `core.mjs` (parse / queue / URL lang / search-term cleaning, unit-tested), `selectors.mjs` (selectors + bilingual name tables), `projects.mjs` (multi-project storage, unit-tested)
 - New platform = add `playwright/fill-<platform>.mjs` + register a target in `gui/server.mjs`.
 
 Full guide & troubleshooting: **[SETUP-playwright.md](SETUP-playwright.md)**.
