@@ -1,13 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Card, Input, Button, Typography, Flex, Tag, Space, Segmented, Tooltip, App as AntApp, Divider, Popconfirm,
+  Select, Modal, Checkbox,
 } from 'antd';
 import {
   ChromeOutlined, GlobalOutlined, LoginOutlined, ThunderboltFilled,
   SaveOutlined, CodeOutlined, CheckCircleFilled, StopOutlined, DeleteOutlined, CopyOutlined, UploadOutlined,
-  TagsOutlined,
+  TagsOutlined, PlusOutlined, EditOutlined, FireOutlined, GithubOutlined,
 } from '@ant-design/icons';
-import { parseTerms } from '../../../src/core.mjs'; // 复用同一份搜索词校验，与后端规则完全一致
+import { parseInput, parseTerms } from '../../../src/core.mjs'; // 复用后端同一份校验，规则完全一致
+import { ALL_UNITS } from '../../../src/units.mjs'; // 执行单元定义与后端共用一份，防漂移
 
 const { Title, Text } = Typography;
 
@@ -15,21 +17,29 @@ const { Title, Text } = Typography;
 const STR = {
   zh: {
     kicker: 'FillDuck · 多语言', title: '填鸭控制台',
-    subtitle: '一键把多语言描述填进 Chrome 与 Edge 商店后台',
+    subtitle: '一键把多语言描述与搜索词批量填进 Chrome、Edge、Firefox 商店后台',
     running: '运行中', idle: '空闲',
-    targets: '目标后台', chromeLabel: 'CHROME 编辑页', edgeLabel: 'EDGE 列表页',
+    targets: '目标后台', chromeLabel: 'CHROME 编辑页', edgeLabel: 'EDGE 列表页', firefoxLabel: 'FIREFOX 编辑页',
+    projectLabel: '当前项目', projectNew: '新建', projectRename: '重命名', projectDelete: '删除',
+    projectNamePh: '项目名（如扩展名称）', projectCreate: '创建', projectOk: '确定', cancel: '取消',
+    projectDeleteConfirm: (n) => `确定删除项目「${n}」？其链接与文案文件将被删除，不可撤销。`,
+    firefoxUrlWarn: '看起来不像 AMO 编辑页（应含 /developers/addon/<名>/edit）',
+    loadFailed: '加载项目状态失败，已暂停自动保存——请确认服务在运行后刷新页面',
+    saveRejected: (e) => `保存被服务端拒绝（${e}），请刷新页面后重试`,
     copyLabel: '多语言文案 JSON', langs: (n) => `${n} 种语言`, short: (n) => ` · ${n} 种 <250 字`,
     jsonBad: 'JSON 格式有误', jsonHint: '检查：引号/逗号是否配对、结尾别多写逗号；描述里的换行要写成 \\n（不能直接回车换行）。',
     jsonFormat: '标准 JSON：{ "语言码": "完整描述", … } —— 键和值都用英文双引号 "，多项之间用逗号分隔，最后一项后不加逗号。',
     loadSample: '填入样例', sampleLoaded: '已填入样例，按需修改后保存', sampleBusy: '文案框已有内容；清空后再填样例。',
-    needCopy: '先填有效的描述或搜索词 JSON', needUrlRun: '先填所选目标的后台链接', needUrlLogin: '先填后台链接（至少一个）再登录',
+    needUrlLogin: '先填后台链接（至少一个）再登录',
     clear: '清空', clearConfirm: '确定清空文案框？不可撤销。', autosaved: '改动自动保存',
     importFile: '导入文件', imported: '已从文件导入文案', importFail: '读取文件失败',
     save: '保存', saved: '已保存链接与文案',
-    exec: '执行', step1: '① 首次先登录', login: '登录两个后台', loginNote: '登录态会记住，只需一次',
-    loginToast: '已打开后台，请在弹出的浏览器里登录 Google 和 Microsoft',
-    step2: '② 选目标并开始', all: '全部', run: '开始填充', runningBtn: '填充中…', stop: '停止',
-    execNote: '会弹出真实浏览器逐步操作；跑完不自动关，人工检查无误后在后台提交。Edge 每种描述需 ≥250 字。',
+    exec: '执行', step1: '① 首次先登录', login: '登录后台', loginNote: '登录态会记住，只需一次',
+    loginToast: '已打开后台，请在弹出的浏览器里登录 Google / Microsoft / Mozilla（按你填的后台）',
+    step2: '② 勾选要填的项并开始', all: '全部', run: '开始填充', runningBtn: '填充中…', stop: '停止',
+    unitChromeDesc: 'Chrome 描述', unitEdgeDesc: 'Edge 描述', unitEdgeTerms: 'Edge 搜索词', unitFirefoxDesc: 'Firefox 描述',
+    needUnit: '勾选至少一项要填的内容', needSetup: '先填好后台链接和对应的描述/搜索词', unitNoUrl: '缺后台链接', unitNoContent: '缺内容',
+    execNote: '会弹出真实浏览器逐步操作；跑完不自动关，请人工检查后自行提交。Edge 描述每种需 ≥250 字；Firefox(AMO) 描述每种上限 15000 字、保存即生效，Chrome/Edge 只写草稿。',
     logsTitle: '运行日志', lines: (n) => `${n} 行`, logsEmpty: '// 等待开始…日志会实时显示在这里',
     copyLogs: '复制日志', logsCopied: '日志已复制', logsCopyFail: '复制失败，请手动选择',
     chromeUrlWarn: '看起来不像 Chrome 编辑页（应含 devconsole 且以 /edit 结尾）',
@@ -44,21 +54,29 @@ const STR = {
   },
   en: {
     kicker: 'FillDuck · Multi-Language', title: 'FillDuck Console',
-    subtitle: 'Fill multilingual descriptions into Chrome & Edge dashboards in one click',
+    subtitle: 'Batch-fill multilingual descriptions & search terms into Chrome, Edge & Firefox dashboards in one click',
     running: 'RUNNING', idle: 'IDLE',
-    targets: 'Target dashboards', chromeLabel: 'CHROME EDIT PAGE', edgeLabel: 'EDGE LISTINGS PAGE',
+    targets: 'Target dashboards', chromeLabel: 'CHROME EDIT PAGE', edgeLabel: 'EDGE LISTINGS PAGE', firefoxLabel: 'FIREFOX EDIT PAGE',
+    projectLabel: 'PROJECT', projectNew: 'New', projectRename: 'Rename', projectDelete: 'Delete',
+    projectNamePh: 'Project name (e.g. extension name)', projectCreate: 'Create', projectOk: 'OK', cancel: 'Cancel',
+    projectDeleteConfirm: (n) => `Delete project "${n}"? Its links and copy files will be removed. This cannot be undone.`,
+    firefoxUrlWarn: 'Doesn’t look like an AMO edit page (should contain /developers/addon/<slug>/edit)',
+    loadFailed: 'Failed to load project state; autosave paused — make sure the server is running, then refresh',
+    saveRejected: (e) => `Save rejected by the server (${e}) — refresh the page and try again`,
     copyLabel: 'Multilingual copy (JSON)', langs: (n) => `${n} languages`, short: (n) => ` · ${n} <250 chars`,
     jsonBad: 'Invalid JSON', jsonHint: 'Check: matching quotes/commas, no trailing comma; line breaks inside a value must be written as \\n (not a real newline).',
     jsonFormat: 'Standard JSON: { "locale": "full description", … } — quote every key and value with ", separate items with commas, no comma after the last one.',
     loadSample: 'Load sample', sampleLoaded: 'Sample loaded — edit it, then Save', sampleBusy: 'The box already has content — clear it first.',
-    needCopy: 'Add valid descriptions or search-terms JSON first', needUrlRun: 'Add the dashboard URL for the selected target', needUrlLogin: 'Add a dashboard URL first (at least one)',
+    needUrlLogin: 'Add a dashboard URL first (at least one)',
     clear: 'Clear', clearConfirm: 'Clear the copy box? This cannot be undone.', autosaved: 'Changes auto-saved',
     importFile: 'Import file', imported: 'Copy imported from file', importFail: 'Failed to read file',
     save: 'Save', saved: 'Links & copy saved',
-    exec: 'Run', step1: '① Log in first (one time)', login: 'Log in to both dashboards', loginNote: 'Login is remembered — only once',
-    loginToast: 'Dashboards opened — please log in to Google and Microsoft in the browser window',
-    step2: '② Pick a target and start', all: 'All', run: 'Start', runningBtn: 'Filling…', stop: 'Stop',
-    execNote: 'A real browser opens and acts step by step; it stays open when done — review, then submit in the dashboard. Edge requires ≥250 chars per description.',
+    exec: 'Run', step1: '① Log in first (one time)', login: 'Log in', loginNote: 'Login is remembered — only once',
+    loginToast: 'Dashboards opened — log in to Google / Microsoft / Mozilla (whichever you configured) in the browser window',
+    step2: '② Check what to fill and start', all: 'All', run: 'Start', runningBtn: 'Filling…', stop: 'Stop',
+    unitChromeDesc: 'Chrome desc', unitEdgeDesc: 'Edge desc', unitEdgeTerms: 'Edge terms', unitFirefoxDesc: 'Firefox desc',
+    needUnit: 'Check at least one thing to fill', needSetup: 'Add a dashboard URL and its description / search terms first', unitNoUrl: 'no URL', unitNoContent: 'no content',
+    execNote: 'A real browser opens and acts step by step; it stays open when done — review, then submit yourself. Edge needs ≥250 chars per description; Firefox (AMO) caps each at 15,000 chars and saves directly, while Chrome/Edge write drafts only.',
     logsTitle: 'Run log', lines: (n) => `${n} lines`, logsEmpty: '// Waiting to start… logs appear here live',
     copyLogs: 'Copy log', logsCopied: 'Log copied', logsCopyFail: 'Copy failed — select manually',
     chromeUrlWarn: 'Doesn’t look like a Chrome edit page (should contain devconsole and end with /edit)',
@@ -108,13 +126,21 @@ export default function App() {
   const t = STR[lang];
   const [chromeUrl, setChromeUrl] = useState('');
   const [edgeUrl, setEdgeUrl] = useState('');
+  const [firefoxUrl, setFirefoxUrl] = useState('');
   const [copy, setCopy] = useState('');
   const [terms, setTerms] = useState('');
+  const [projects, setProjects] = useState([]);
+  const [active, setActive] = useState('');
+  const [projModal, setProjModal] = useState(null); // null | { mode: 'create'|'rename', value: string }
   const [logs, setLogs] = useState([]);
   const [running, setRunning] = useState(false);
-  const [target, setTarget] = useState(() => {
-    try { const s = localStorage.getItem('fillduck_target'); if (s === 'chrome' || s === 'edge' || s === 'all') return s; } catch { /* ignore */ }
-    return 'all';
+  // 执行单元多选：后台 × 内容 的最小粒度，可独立勾选（Edge 的描述与搜索词分开）。
+  const [units, setUnits] = useState(() => {
+    try {
+      const s = JSON.parse(localStorage.getItem('fillduck_units') || 'null');
+      if (Array.isArray(s)) return s.filter((u) => ALL_UNITS.includes(u));
+    } catch { /* ignore */ }
+    return [...ALL_UNITS]; // 默认全选
   });
   const consoleRef = useRef(null);
   const fileRef = useRef(null);    // 隐藏的描述文件选择框
@@ -124,32 +150,55 @@ export default function App() {
   const runningRef = useRef(false);                    // SSE 闭包里判断运行态
   const runErrRef = useRef(false);                     // 本次运行是否出现过错误日志
   const logIdRef = useRef(0);                           // 日志单调 id：列表头部丢弃时仍保持 key 稳定
+  const staleWarnedRef = useRef(false);                 // 自动保存被拒只提醒一次（成功后复位）
 
   const onLangChange = (v) => {
     setLang(v);
     try { localStorage.setItem('fillduck_ui_lang', v); } catch { /* ignore */ }
   };
-  const onTargetChange = (v) => {
-    setTarget(v);
-    try { localStorage.setItem('fillduck_target', v); } catch { /* ignore */ }
+  const onUnitsChange = (v) => {
+    setUnits(v);
+    try { localStorage.setItem('fillduck_units', JSON.stringify(v)); } catch { /* ignore */ }
   };
 
-  // 把当前链接、描述、搜索词写盘（/save 同时落 config.json / descriptions.json / search-terms.json）。
-  // 手动保存与自动保存共用。
+  // 把当前链接、描述、搜索词写盘到【当前项目】。带上项目名：切换项目瞬间残留的
+  // 防抖保存会被服务端按名拒掉，避免 A 项目的文案串写进 B（见 server /save）。
+  // 手动保存与自动保存共用。返回服务端结果，调用方必须检查 ok（被拒的保存不能装成功）。
   const persist = () => fetch('/save', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chromeEditUrl: chromeUrl.trim(), edgeListingsUrl: edgeUrl.trim(), copy, terms }),
-  });
+    body: JSON.stringify({
+      project: active,
+      chromeEditUrl: chromeUrl.trim(), edgeListingsUrl: edgeUrl.trim(), firefoxEditUrl: firefoxUrl.trim(),
+      copy, terms,
+    }),
+  }).then((r) => r.json());
 
-  useEffect(() => {
-    fetch('/state').then((r) => r.json()).then((s) => {
+  // 整体载入当前项目（初次与切换项目后共用）。载入期间冻结自动保存；
+  // 失败时【保持冻结】并提示——否则空表单会被自动保存进真实项目，清掉链接与文案。
+  const loadState = async () => {
+    loadedRef.current = false;
+    try {
+      const s = await fetch('/state').then((r) => r.json());
+      setProjects(s.projects || []);
+      setActive(s.active || '');
       setChromeUrl(s.chromeEditUrl || '');
       setEdgeUrl(s.edgeListingsUrl || '');
+      setFirefoxUrl(s.firefoxEditUrl || '');
       setCopy(s.copy || '');
       setTerms(s.terms || '');
-    }).catch(() => {}).finally(() => { loadedRef.current = true; });
+      loadedRef.current = true;
+    } catch {
+      message.error(tRef.current.loadFailed);
+    }
+  };
+
+  useEffect(() => {
+    loadState();
 
     const es = new EventSource('/events');
+    // 每次（重）连建立时清空日志面板：服务端会重放整个缓冲（最多 800 行），
+    // 若只追加，断线重连（重启服务、睡眠唤醒）后整段历史会重复出现，误导运行状态。
+    es.onopen = () => { setLogs([]); };
     es.onmessage = (e) => {
       const d = JSON.parse(e.data);
       if (d.type === 'log') {
@@ -183,26 +232,72 @@ export default function App() {
   }, [logs]);
 
   // 自动保存：链接/文案改动后防抖落盘，避免没点保存就关页导致白打。
-  // 复用 persist()，请求体只在一处定义；失败不打扰，下次改动会再写。
+  // 复用 persist()，请求体只在一处定义；网络失败不打扰（下次改动会再写）。
+  // 但服务端的「stale project」拒绝必须提示：旧标签页（重启服务后自动开新页，旧页仍可用）
+  // 在别处切走项目后，这里的每次自动保存都会被拒——静默吞掉等于挂着「自动保存」的牌子丢数据。
+  // 同一轮被拒只提醒一次，成功后复位，避免连续输入时每 800ms 弹一条。
   useEffect(() => {
     if (!loadedRef.current) return undefined;
-    const id = setTimeout(() => { persist().catch(() => {}); }, 800);
+    const id = setTimeout(() => {
+      // 触发时再查一次冻结标志：定时器可能赶在「切项目」的 persist→select→loadState 间隙触发
+      //（编辑后 0.8s 内点切换即可命中），此时 mutateProject 已先行落盘、这次保存注定被按设计拒绝，
+      // 既不该发请求、更不该把它当异常警告出来。
+      if (!loadedRef.current) return;
+      persist().then((r) => {
+        if (r.ok) { staleWarnedRef.current = false; return; }
+        if (!staleWarnedRef.current) {
+          staleWarnedRef.current = true;
+          message.warning(tRef.current.saveRejected(r.error || 'stale'));
+        }
+      }).catch(() => {});
+    }, 800);
     return () => clearTimeout(id);
-  }, [chromeUrl, edgeUrl, copy, terms]);
+  }, [chromeUrl, edgeUrl, firefoxUrl, copy, terms]);
 
-  // 解析文案，显示语言数 / 校验
+  // —— 项目操作 ——
+  const callProjects = async (action, body) => {
+    const r = await fetch('/projects/' + action, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    }).then((x) => x.json()).catch(() => ({ ok: false, error: 'network' }));
+    if (!r.ok) { message.error(r.error || 'failed'); return false; }
+    return true;
+  };
+  // 项目变更的统一编排：冻结自动保存 → 当前编辑落盘（带项目名，服务端校验）→ 执行操作 → 重载。
+  // select / create / rename / delete 都走这一条路，避免某个入口漏掉冻结或落盘
+  //（rename 曾漏掉先落盘：防抖窗口内的编辑会被 stale 守卫拒掉后被磁盘旧值覆盖）。
+  const mutateProject = async (action, body) => {
+    loadedRef.current = false;
+    await persist().catch(() => {}); // 服务未起等网络失败不阻塞操作；stale 拒绝在此场景不会发生（还没切）
+    if (await callProjects(action, body)) await loadState();
+    else loadedRef.current = true;
+  };
+  const onSelectProject = async (name) => {
+    if (name === active) return;
+    await mutateProject('select', { name });
+  };
+  const onProjModalOk = async () => {
+    const v = (projModal && projModal.value || '').trim();
+    if (!v) return;
+    if (projModal.mode === 'create') await mutateProject('create', { name: v });
+    else if (v !== active) await mutateProject('rename', { from: active, to: v });
+    setProjModal(null);
+  };
+  // 删除也走统一编排（含先落盘）：删除可能失败（文件被编辑器/杀毒占用等），
+  // 失败后编辑必须还在磁盘上——而冻结窗口内被跳过的防抖保存不会重试，
+  // 不先落盘的话那笔编辑就静默丢了。成功路径上多写一次马上要删的文件，无害。
+  const onDeleteProject = () => mutateProject('delete', { name: active });
+
+  // 解析文案，显示语言数 / 校验。必须用与后端同一份 parseInput：之前 GUI 手写的宽松版
+  // 只查“顶层是对象”，值是数组/空串（如把搜索词 JSON 误贴进描述框）也亮“N 种语言”通过标签，
+  // 跑起来才被服务端整体拒绝、什么都没填，前端还弹成功提示。
   const langInfo = useMemo(() => {
     const tx = copy.trim();
     if (!tx) return null;
-    try {
-      const o = JSON.parse(tx);
-      if (o && typeof o === 'object' && !Array.isArray(o)) {
-        const n = Object.keys(o).length;
-        const shortLangs = Object.entries(o).filter(([, v]) => typeof v === 'string' && v.trim().length < 250).map(([k]) => k);
-        return { ok: true, n, short: shortLangs.length, shortLangs };
-      }
-      return { ok: false };
-    } catch { return { ok: false }; }
+    const r = parseInput(tx);
+    if (!r.ok) return { ok: false };
+    const entries = Object.entries(r.data);
+    const shortLangs = entries.filter(([, v]) => v.length < 250).map(([k]) => k);
+    return { ok: true, n: entries.length, short: shortLangs.length, shortLangs };
   }, [copy]);
 
   // 搜索词校验：用与后端同一份 parseTerms，显示语言数与被丢弃词数。
@@ -259,36 +354,64 @@ export default function App() {
     try { await navigator.clipboard.writeText(text); message.success(t.logsCopied); }
     catch { message.error(t.logsCopyFail); }
   };
-  const onSave = async () => { await persist(); message.success(t.saved); };
-  const onLogin = async () => { await persist(); await fetch('/login', { method: 'POST' }); message.info(t.loginToast); };
+  // 保存结果必须检查：服务端会拒掉过期/缺名的保存（如另一个标签页切走了项目），
+  // 不检查就弹成功提示等于在数据被丢弃时报“已保存”。
+  const persistChecked = async () => {
+    try {
+      const r = await persist();
+      if (!r.ok) { message.error(t.saveRejected(r.error || 'unknown')); return false; }
+      return true;
+    } catch { message.error(t.saveRejected('network')); return false; }
+  };
+  const onSave = async () => { if (await persistChecked()) message.success(t.saved); };
+  const onLogin = async () => {
+    if (!(await persistChecked())) return;
+    await fetch('/login', { method: 'POST' });
+    message.info(t.loginToast);
+  };
   const onRun = async () => {
     // 借这次用户点击申请通知权限：跑完若用户切走，发系统通知叫回（见 SSE status 分支）。
     try { if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {}); } catch { /* ignore */ }
-    await persist();
-    await fetch('/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ store: target }) });
+    if (!(await persistChecked())) return; // 保存被拒还继续跑，会拿磁盘旧文案填商店
+    await fetch('/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ units: effectiveUnits }) });
   };
   const onStop = () => fetch('/stop', { method: 'POST' });
 
   // 链接与文案的派生态：trim 各算一次，下面复用。
   const cUrl = chromeUrl.trim();
   const eUrl = edgeUrl.trim();
+  const fUrl = firefoxUrl.trim();
   // 链接体检（仅提示，不拦截运行——真正的关卡是运行时的页面检测）。
   const chromeUrlWarn = cUrl && !/devconsole\/.*\/edit\/?($|\?|#)/i.test(cUrl);
   const edgeUrlWarn = eUrl && !/microsoftedge\/[^/]+\/listings\/?($|\?|#)/i.test(eUrl);
+  const firefoxUrlWarn = fUrl && !/\/developers\/addon\/[^/]+\/edit/i.test(fUrl);
 
-  // 运行前置校验：要有可填内容（描述或搜索词）；所选目标必须有对应后台链接（all = 至少一个）。
-  const hasAnyUrl = !!cUrl || !!eUrl;
-  const targetUrlOk = target === 'chrome' ? !!cUrl
-    : target === 'edge' ? !!eUrl
-    : hasAnyUrl;
+  // 运行前置校验：每个执行单元各有链接 + 内容的前置条件。
+  const hasAnyUrl = !!cUrl || !!eUrl || !!fUrl;
   const hasValidDesc = !!(langInfo && langInfo.ok);
   const hasValidTerms = !!(termsInfo && termsInfo.ok);
-  // 搜索词只对 Edge 生效：选 chrome 时只认描述，否则描述或搜索词任一即可。
-  const hasContentForTarget = target === 'chrome' ? hasValidDesc : (hasValidDesc || hasValidTerms);
-  const runReason = !hasContentForTarget ? t.needCopy : !targetUrlOk ? t.needUrlRun : '';
+  // 每个单元：是否具备链接与内容（决定能否勾选/执行）。
+  const unitReady = {
+    'chrome-desc': { url: !!cUrl, content: hasValidDesc },
+    'edge-desc': { url: !!eUrl, content: hasValidDesc },
+    'edge-terms': { url: !!eUrl, content: hasValidTerms },
+    'firefox-desc': { url: !!fUrl, content: hasValidDesc },
+  };
+  const unitRunnable = (u) => unitReady[u].url && unitReady[u].content;
+  // 真正会执行的单元 = 勾选且条件齐备的；至少一个才能跑。
+  const effectiveUnits = units.filter(unitRunnable);
+  // 提示分两种：有可勾的项但用户没勾 → 让他勾；一个可执行项都没有 → 让他先填链接/内容。
+  const anyRunnable = ALL_UNITS.some(unitRunnable);
+  const runReason = effectiveUnits.length ? '' : (anyRunnable ? t.needUnit : t.needSetup);
   const canRun = !runReason;
   const jsonInvalid = !!(copy.trim() && langInfo && !langInfo.ok); // 有内容但解析失败
   const loginNeedsUrl = !running && !hasAnyUrl;                    // 没填链接、又没在跑
+  const unitMeta = [
+    { key: 'chrome-desc', label: t.unitChromeDesc },
+    { key: 'edge-desc', label: t.unitEdgeDesc },
+    { key: 'edge-terms', label: t.unitEdgeTerms },
+    { key: 'firefox-desc', label: t.unitFirefoxDesc },
+  ];
 
   const labelStyle = { display: 'block', marginBottom: 6, color: '#8b93a3', fontSize: 12, letterSpacing: '0.04em' };
   const hintStyle = { display: 'block', marginTop: 10, color: '#f2b138', fontSize: 12 };
@@ -307,6 +430,15 @@ export default function App() {
           </Text>
         </div>
         <Flex align="center" gap={12}>
+          <a
+            href="https://github.com/rockbenben/fillduck"
+            target="_blank"
+            rel="noreferrer"
+            className="mono gh-link"
+            style={{ color: '#8b93a3', fontSize: 12.5, display: 'inline-flex', alignItems: 'center', gap: 5 }}
+          >
+            <GithubOutlined style={{ fontSize: 15 }} /> rockbenben/fillduck
+          </a>
           <Segmented
             size="small"
             value={lang}
@@ -330,6 +462,31 @@ export default function App() {
           <GlobalOutlined style={{ color: '#f2b138' }} />
           <Text strong style={{ fontSize: 15 }}>{t.targets}</Text>
         </Flex>
+        <Flex align="center" gap={8} wrap style={{ marginBottom: 18 }}>
+          <label style={{ ...labelStyle, margin: 0 }}>{t.projectLabel}</label>
+          <Select
+            style={{ minWidth: 200 }} value={active || undefined} disabled={running}
+            onChange={onSelectProject}
+            options={projects.map((p) => ({ label: p, value: p }))}
+          />
+          <Button variant="text" color="default" icon={<PlusOutlined />} disabled={running}
+            onClick={() => setProjModal({ mode: 'create', value: '' })}>{t.projectNew}</Button>
+          <Button variant="text" color="default" icon={<EditOutlined />} disabled={running}
+            onClick={() => setProjModal({ mode: 'rename', value: active })}>{t.projectRename}</Button>
+          <Popconfirm title={t.projectDeleteConfirm(active)} onConfirm={onDeleteProject} okText={t.projectDelete} cancelText={t.cancel} disabled={running}>
+            <Button variant="text" color="danger" icon={<DeleteOutlined />} disabled={running}>{t.projectDelete}</Button>
+          </Popconfirm>
+        </Flex>
+        <Modal
+          open={!!projModal} title={projModal && projModal.mode === 'create' ? t.projectNew : t.projectRename}
+          okText={projModal && projModal.mode === 'create' ? t.projectCreate : t.projectOk}
+          cancelText={t.cancel}
+          onOk={onProjModalOk} onCancel={() => setProjModal(null)} destroyOnHidden width={360}
+        >
+          <Input autoFocus placeholder={t.projectNamePh} value={(projModal && projModal.value) || ''}
+            onChange={(e) => setProjModal((m) => ({ ...m, value: e.target.value }))}
+            onPressEnter={onProjModalOk} />
+        </Modal>
         <div className="field-grid" style={{ marginBottom: 18 }}>
           <div>
             <label style={labelStyle}>{t.chromeLabel}</label>
@@ -340,6 +497,11 @@ export default function App() {
             <label style={labelStyle}>{t.edgeLabel}</label>
             <Input className="mono" prefix={<GlobalOutlined style={{ color: '#6b7280' }} />} placeholder="https://partner.microsoft.com/.../listings" value={edgeUrl} onChange={(e) => setEdgeUrl(e.target.value)} />
             {edgeUrlWarn && <Text style={{ display: 'block', marginTop: 5, color: '#f2b138', fontSize: 11.5 }}>{t.edgeUrlWarn}</Text>}
+          </div>
+          <div>
+            <label style={labelStyle}>{t.firefoxLabel}</label>
+            <Input className="mono" prefix={<FireOutlined style={{ color: '#6b7280' }} />} placeholder="https://addons.mozilla.org/.../developers/addon/<slug>/edit" value={firefoxUrl} onChange={(e) => setFirefoxUrl(e.target.value)} />
+            {firefoxUrlWarn && <Text style={{ display: 'block', marginTop: 5, color: '#f2b138', fontSize: 11.5 }}>{t.firefoxUrlWarn}</Text>}
           </div>
         </div>
 
@@ -371,7 +533,7 @@ export default function App() {
           <Space size={4}>
             <Button variant="text" color="default" icon={<CodeOutlined />} onClick={onLoadSample}>{t.loadSample}</Button>
             <Button variant="text" color="default" icon={<UploadOutlined />} onClick={() => fileRef.current && fileRef.current.click()}>{t.importFile}</Button>
-            <Popconfirm title={t.clearConfirm} onConfirm={onClear} okText={t.clear} disabled={!copy.trim()}>
+            <Popconfirm title={t.clearConfirm} onConfirm={onClear} okText={t.clear} cancelText={t.cancel} disabled={!copy.trim()}>
               <Button variant="text" color="default" icon={<DeleteOutlined />} disabled={!copy.trim()}>{t.clear}</Button>
             </Popconfirm>
           </Space>
@@ -412,7 +574,7 @@ export default function App() {
           <Space size={4}>
             <Button variant="text" color="default" icon={<CodeOutlined />} onClick={onLoadSampleTerms}>{t.termsSample}</Button>
             <Button variant="text" color="default" icon={<UploadOutlined />} onClick={() => termsFileRef.current && termsFileRef.current.click()}>{t.importFile}</Button>
-            <Popconfirm title={t.termsClearConfirm} onConfirm={onClearTerms} okText={t.clear} disabled={!terms.trim()}>
+            <Popconfirm title={t.termsClearConfirm} onConfirm={onClearTerms} okText={t.clear} cancelText={t.cancel} disabled={!terms.trim()}>
               <Button variant="text" color="default" icon={<DeleteOutlined />} disabled={!terms.trim()}>{t.clear}</Button>
             </Popconfirm>
           </Space>
@@ -436,17 +598,26 @@ export default function App() {
 
         <Divider style={{ margin: '8px 0 18px', borderColor: '#1c2027' }} />
 
+        <Text className="mono" style={{ display: 'block', color: '#6b7280', fontSize: 12, marginBottom: 10 }}>{t.step2}</Text>
+        <Flex align="center" gap={18} wrap style={{ marginBottom: 16 }}>
+          <Checkbox.Group value={units} onChange={onUnitsChange} disabled={running}>
+            <Space size={16} wrap>
+              {unitMeta.map((u) => {
+                const ready = unitRunnable(u.key);
+                // 缺链接或缺内容就置灰不可勾（所见即所得，不让用户勾一个跑不了的项），
+                // 并常驻标注原因；填好后该项自动恢复、保留原有勾选态可立即跑。
+                const why = !unitReady[u.key].url ? t.unitNoUrl : !unitReady[u.key].content ? t.unitNoContent : '';
+                return (
+                  <Checkbox key={u.key} value={u.key} disabled={!ready}>
+                    <span style={{ color: ready ? '#e9ebf0' : '#6b7280' }}>{u.label}</span>
+                    {why && <Text style={{ marginLeft: 5, fontSize: 11, color: '#566071' }}>({why})</Text>}
+                  </Checkbox>
+                );
+              })}
+            </Space>
+          </Checkbox.Group>
+        </Flex>
         <Flex align="center" gap={14} wrap>
-          <Text className="mono" style={{ color: '#6b7280', fontSize: 12 }}>{t.step2}</Text>
-          <Segmented
-            value={target}
-            onChange={onTargetChange}
-            options={[
-              { label: 'Chrome', value: 'chrome', icon: <ChromeOutlined /> },
-              { label: 'Edge', value: 'edge', icon: <GlobalOutlined /> },
-              { label: t.all, value: 'all' },
-            ]}
-          />
           <Button color="primary" variant="solid" icon={<ThunderboltFilled />} onClick={onRun} loading={running} disabled={running || !canRun}>
             {running ? t.runningBtn : t.run}
           </Button>

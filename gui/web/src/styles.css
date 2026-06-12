@@ -82,5 +82,9 @@ body::before {
   100% { box-shadow: 0 0 0 0 rgba(70, 209, 126, 0); }
 }
 
-.field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-@media (max-width: 720px) { .field-grid { grid-template-columns: 1fr; } }
+/* 三个后台链接框（Chrome / Edge / Firefox）等宽三列；窄屏降到单列，避免 2+1 不齐。 */
+.field-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+@media (max-width: 760px) { .field-grid { grid-template-columns: 1fr; } }
+
+.gh-link { transition: color 0.15s; text-decoration: none; }
+.gh-link:hover { color: #f2b138 !important; }

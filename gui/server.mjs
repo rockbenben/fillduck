@@ -6,19 +6,24 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { parseInput, parseTerms } from '../src/core.mjs';
+import {
+  migrateIfNeeded, listProjects, getActive, setActive,
+  createProject, renameProject, deleteProject, projectPaths,
+  readJsonSafe, readTextSafe,
+} from '../src/projects.mjs';
 import { launchPersistent } from '../playwright/browser.mjs';
 import { fillChrome } from '../playwright/fill-chrome.mjs';
 import { fillEdge } from '../playwright/fill-edge.mjs';
 import { fillEdgeSearchTerms } from '../playwright/fill-edge-terms.mjs';
+import { fillFirefox } from '../playwright/fill-firefox.mjs';
+import { ALL_UNITS, STORE_TO_UNITS } from '../src/units.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const PROFILE_DIR = path.join(ROOT, '.auth-profile');
-const CONFIG = path.join(ROOT, 'config.json');
-const DESCRIPTIONS = path.join(ROOT, 'descriptions.json');
-const DESCRIPTIONS_OLD = path.join(ROOT, 'copy.json'); // 向后兼容：老用户的文案文件
-const TERMS = path.join(ROOT, 'search-terms.json');
 const WEB_DIST = path.join(__dirname, 'web', 'dist'); // 构建好的 antd6 前端
+
+await migrateIfNeeded(ROOT); // 老布局（根目录三文件）首次启动时迁入 projects/default/
 const PORT = 4599;
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css',
@@ -28,6 +33,7 @@ const MIME = {
 
 let ctx = null;          // 常驻浏览器上下文（登录与填充共用）
 let ctxInit = null;      // 正在初始化的 promise，避免并发重复启动同一 profile
+const loginPages = new Map(); // 'chrome'|'edge'|'firefox' -> 本工具为该后台开过的页（复用，防标签堆积）
 let busy = false;
 let cancelRequested = false; // 停止标志：填充循环每项开始前检查
 const clients = new Set(); // SSE 连接
@@ -45,13 +51,19 @@ function log(msg) {
 }
 function setStatus(status) { broadcast({ type: 'status', status }); }
 
-async function readJsonSafe(p) { try { return JSON.parse(await readFile(p, 'utf8')); } catch (e) { return null; } }
-async function readTextSafe(p) { try { return await readFile(p, 'utf8'); } catch (e) { return ''; } }
-// 读描述文案：优先新名 descriptions.json，文件【不存在】才兜底老的 copy.json（不丢老用户现有文案）。
-// 必须按“存在与否”而非“内容是否为空”判断：用户在 GUI 清空描述框会写出空的 descriptions.json，
-// 此时若按内容回退，旧 copy.json 的文案会“还魂”——刷新后回到框里、填充时被写进商店。
-async function readDescriptions() {
-  try { return await readFile(DESCRIPTIONS, 'utf8'); } catch (e) { return readTextSafe(DESCRIPTIONS_OLD); }
+// 当前激活项目的名字与文件路径（active 失效时 getActive 会自动回退修复）。
+async function activeProject() {
+  const name = await getActive(ROOT);
+  return { name, paths: projectPaths(ROOT, name) };
+}
+
+// 项目文件互斥锁：/save 的三连写与 /projects 的改名/删除若交错执行，会把文件写进
+// 刚被移走的目录（部分写入、ENOENT）。所有“写项目文件/动项目目录”的操作串行化。
+let fsChain = Promise.resolve();
+function serialized(fn) {
+  const run = fsChain.then(fn, fn);
+  fsChain = run.then(() => {}, () => {}); // 失败不断链
+  return run;
 }
 
 async function ensureBrowser() {
@@ -72,32 +84,71 @@ async function doLogin() {
   // 与正在跑的 fillChrome/fillEdge 抢同一个 page，导致运行中的填充被导航打断。
   if (busy) { log('正在填充中，请等当前任务结束再登录。'); return; }
   try {
-    const cfg = (await readJsonSafe(CONFIG)) || {};
+    const cfg = await serialized(async () => {
+      const { paths } = await activeProject();
+      return (await readJsonSafe(paths.config)) || {};
+    });
     // 没有任何后台链接就别开空白浏览器：登录需要先打开后台页面。
-    if (!cfg.chromeEditUrl && !cfg.edgeListingsUrl) {
+    if (!cfg.chromeEditUrl && !cfg.edgeListingsUrl && !cfg.firefoxEditUrl) {
       log('请先填后台链接（至少一个）再点登录。');
       return;
     }
     const c = await ensureBrowser();
-    const page = c.pages()[0] || (await c.newPage());
-    log('请在弹出的浏览器里登录 Google 和 Microsoft，登录后回来点“填充”。');
-    if (cfg.chromeEditUrl) await page.goto(cfg.chromeEditUrl).catch((e) => log('Chrome 打开失败：' + e.message));
-    if (cfg.edgeListingsUrl) { const p2 = await c.newPage(); await p2.goto(cfg.edgeListingsUrl).catch((e) => log('Edge 打开失败：' + e.message)); }
+    log('请在弹出的浏览器里登录 Google / Microsoft / Mozilla（按你填的后台），登录后回来点“填充”。');
+    // 复用本工具自己开过的登录页：每次点登录都 newPage 会堆积重型后台标签（点 N 次多 2N 个、
+    // 永不回收）。复用的判定不能靠 URL 匹配——后台会做规范化重定向（AMO 加语言段、
+    // devconsole 插 /u/0/、未登录落在 accounts.google.com），按配置前缀永远配不上；
+    // 按整源匹配又会劫持用户手动开的同源页面。改为【显式登记】：本工具为某后台开过的页
+    // 记在 loginPages（按目标键），下次直接复用；页面被用户关掉则重开。绝不触碰别的页。
+    const pageFor = async (key, fallbackFirst) => {
+      const prev = loginPages.get(key);
+      if (prev && !prev.isClosed()) return prev;
+      const first = c.pages()[0];
+      let p;
+      if (fallbackFirst && first && first.url() === 'about:blank' && ![...loginPages.values()].includes(first)) {
+        p = first; // 启动时的空白首页给 Chrome 用，与原行为一致
+      } else {
+        p = await c.newPage();
+      }
+      loginPages.set(key, p);
+      return p;
+    };
+    // 三个后台页并行加载：串行 goto 时 Firefox 页要等前两个重型后台 load 完才开始，多等 10~30s。
+    // pageFor 依次 await 完成分配后再并行 goto，分配阶段无竞态。
+    const opens = [];
+    if (cfg.chromeEditUrl) opens.push((await pageFor('chrome', true)).goto(cfg.chromeEditUrl).catch((e) => log('Chrome 打开失败：' + e.message)));
+    if (cfg.edgeListingsUrl) opens.push((await pageFor('edge')).goto(cfg.edgeListingsUrl).catch((e) => log('Edge 打开失败：' + e.message)));
+    if (cfg.firefoxEditUrl) opens.push((await pageFor('firefox')).goto(cfg.firefoxEditUrl).catch((e) => log('Firefox 打开失败：' + e.message)));
+    await Promise.all(opens);
   } catch (e) {
     log('❌ 登录启动失败：' + e.message);
   }
 }
 
-async function doRun(store) {
-  log(`收到填充请求：${store}`);
+async function doRun(input) {
+  // input: { units?: string[] } 或旧式 { store }
+  const units = Array.isArray(input.units) && input.units.length
+    ? input.units.filter((u) => ALL_UNITS.includes(u))
+    : (STORE_TO_UNITS[input.store] || []);
+  log(`收到填充请求：${units.join(' + ') || '(空)'}`);
+  if (!units.length) { log('⚠️ 没有选中任何执行目标。'); return; }
   if (busy) { log('已有任务在跑，请稍候。'); return; }
   busy = true; cancelRequested = false; setStatus('running');
+  const want = (u) => units.includes(u);
   const shouldStop = () => cancelRequested;
   try {
-    const cfg = (await readJsonSafe(CONFIG)) || {};
-    // 描述与搜索词各自独立解析：任一为空都允许，只跑有内容的那部分。
-    const descRaw = await readDescriptions();
-    const termsRaw = await readTextSafe(TERMS);
+    // 起步读取入锁：点「开始填充」常发生在防抖自动保存落盘的同一瞬间（先手动保存、
+    // 残留的防抖定时器随后又写一次），锁外读会撞上截断中的文件，拿空/半截文案开跑。
+    const { projName, cfg, descRaw, termsRaw } = await serialized(async () => {
+      const { name, paths } = await activeProject();
+      return {
+        projName: name,
+        cfg: (await readJsonSafe(paths.config)) || {},
+        descRaw: await readTextSafe(paths.descriptions),
+        termsRaw: await readTextSafe(paths.terms),
+      };
+    });
+    log(`项目：${projName}`);
     const descParsed = descRaw.trim() ? parseInput(descRaw) : { ok: true, data: {} };
     const termsParsed = termsRaw.trim() ? parseTerms(termsRaw) : { ok: true, data: {} };
     if (descRaw.trim() && !descParsed.ok) log('描述 JSON 有问题：' + descParsed.error);
@@ -108,25 +159,49 @@ async function doRun(store) {
     const hasTerms = Object.keys(termsData).length > 0;
     if (!hasDesc && !hasTerms) { log('⚠️ 没有可填的内容：描述与搜索词都为空或有误。'); return; }
 
-    const page = await getPage();
-    let ran = 0; // 实际开跑的目标数，用于诚实汇报
-    if (!cancelRequested && (store === 'chrome' || store === 'all')) {
+    // 浏览器惰性启动：确认至少有一个目标真正要跑时才弹（否则“无目标”也会白白开一个浏览器窗口）。
+    let page = null;
+    const getP = async () => (page || (page = await getPage()));
+    let ran = 0;          // 实际开跑的目标数，用于诚实汇报
+    const targetErrors = []; // 出错的目标：单个后台失败不拖累其余目标
+    // 每个目标独立 try/catch：选「全部」时 Chrome 抛错不应让 Edge/Firefox 直接不跑。
+    const runTarget = async (name, fn) => {
+      try { await fn(); ran++; }
+      catch (e) { targetErrors.push(name); log(`❌ ${name} 出错：${e.message}（继续跑其余目标）`); }
+    };
+    if (!cancelRequested && want('chrome-desc')) {
       if (!cfg.chromeEditUrl) log('没填 Chrome 链接，跳过。');
-      else if (!hasDesc) log('Chrome 无描述可填，跳过（搜索词仅 Edge 支持）。');
-      else { log('打开 Chrome 后台…'); await page.goto(cfg.chromeEditUrl, { waitUntil: 'load' }); await fillChrome(page, descData, log, shouldStop); ran++; }
+      else if (!hasDesc) log('Chrome 无描述可填，跳过。');
+      else await runTarget('Chrome 描述', async () => { const p = await getP(); log('打开 Chrome 后台…'); await p.goto(cfg.chromeEditUrl, { waitUntil: 'load' }); await fillChrome(p, descData, log, shouldStop); });
     }
-    if (!cancelRequested && (store === 'edge' || store === 'all')) {
+    if (!cancelRequested && (want('edge-desc') || want('edge-terms'))) {
+      const doDesc = want('edge-desc') && hasDesc;
+      const doTerms = want('edge-terms') && hasTerms;
       if (!cfg.edgeListingsUrl) log('没填 Edge 链接，跳过。');
-      else if (!hasDesc && !hasTerms) log('Edge 无描述也无搜索词，跳过。');
-      else {
-        log('打开 Edge 后台…');
-        await page.goto(cfg.edgeListingsUrl, { waitUntil: 'load' });
-        if (!cancelRequested && hasDesc) { await fillEdge(page, descData, log, shouldStop); ran++; }
-        if (!cancelRequested && hasTerms) { await fillEdgeSearchTerms(page, termsData, log, shouldStop); ran++; }
+      else if (!doDesc && !doTerms) {
+        if (want('edge-desc') && !hasDesc) log('Edge 描述：无文案可填，跳过。');
+        if (want('edge-terms') && !hasTerms) log('Edge 搜索词：无数据可填，跳过。');
+      } else {
+        await runTarget(doDesc && doTerms ? 'Edge' : doDesc ? 'Edge 描述' : 'Edge 搜索词', async () => {
+          const p = await getP();
+          log('打开 Edge 后台…');
+          await p.goto(cfg.edgeListingsUrl, { waitUntil: 'load' });
+          if (!cancelRequested && doDesc) await fillEdge(p, descData, log, shouldStop);
+          if (!cancelRequested && doTerms) await fillEdgeSearchTerms(p, termsData, log, shouldStop);
+        });
+        if (want('edge-desc') && !hasDesc) log('Edge 描述：无文案可填，已跳过。');
+        if (want('edge-terms') && !hasTerms) log('Edge 搜索词：无数据可填，已跳过。');
       }
     }
+    if (!cancelRequested && want('firefox-desc')) {
+      if (!cfg.firefoxEditUrl) log('没填 Firefox 链接，跳过。');
+      else if (!hasDesc) log('Firefox 无描述可填，跳过。');
+      else await runTarget('Firefox', async () => { const p = await getP(); log('打开 Firefox 后台…'); await p.goto(cfg.firefoxEditUrl, { waitUntil: 'load' }); await fillFirefox(p, descData, log, shouldStop); });
+    }
     if (cancelRequested) log('⏹ 已停止（已填的部分保留）。');
-    else if (ran === 0) log('⚠️ 没有可填充的目标：请确认所选后台的链接已填。');
+    else if (ran === 0 && targetErrors.length === 0) log('⚠️ 没有可填充的目标：请确认所选后台的链接已填。');
+    else if (ran === 0) log(`❌ 全部目标都出错，本次没有填充任何内容：${targetErrors.join('、')}（浏览器保留现场）`);
+    else if (targetErrors.length) log(`⚠️ 完成，但这些目标出错需重跑：${targetErrors.join('、')}（浏览器保留现场）`);
     else log('✅ 完成。请在浏览器里人工检查后提交。');
   } catch (e) {
     log('❌ 出错：' + e.message + '（浏览器保留现场，修好后重跑）');
@@ -136,8 +211,11 @@ async function doRun(store) {
 }
 
 function readBody(req) {
+  // 按 Buffer 收集再整体转码：逐块 += 在分块边界切开多字节字符（中文项目名/文案）会乱码。
   return new Promise((resolve) => {
-    let b = ''; req.on('data', (c) => { b += c; }); req.on('end', () => resolve(b));
+    const chunks = [];
+    req.on('data', (c) => { chunks.push(c); });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
   });
 }
 function sendJson(res, obj) { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); }
@@ -150,23 +228,74 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(html); return;
     }
     if (req.method === 'GET' && url.pathname === '/state') {
-      const cfg = (await readJsonSafe(CONFIG)) || {};
-      sendJson(res, {
-        chromeEditUrl: cfg.chromeEditUrl || '', edgeListingsUrl: cfg.edgeListingsUrl || '',
-        copy: await readDescriptions(), terms: await readTextSafe(TERMS), busy,
+      // 读也入锁：writeFile 是「先截断再写」，锁外读会撞上半截文件——
+      // 撕裂的文案被表单载入后，自动保存还会把半截内容写回磁盘固化成永久损坏。
+      const snap = await serialized(async () => {
+        const { name, paths } = await activeProject();
+        const cfg = (await readJsonSafe(paths.config)) || {};
+        return {
+          projects: await listProjects(ROOT), active: name,
+          chromeEditUrl: cfg.chromeEditUrl || '', edgeListingsUrl: cfg.edgeListingsUrl || '',
+          firefoxEditUrl: cfg.firefoxEditUrl || '',
+          copy: await readTextSafe(paths.descriptions), terms: await readTextSafe(paths.terms),
+        };
       });
+      sendJson(res, { ...snap, busy });
       return;
     }
     if (req.method === 'POST' && url.pathname === '/save') {
       const body = JSON.parse(await readBody(req));
-      await writeFile(CONFIG, JSON.stringify({
-        chromeEditUrl: body.chromeEditUrl || '', edgeListingsUrl: body.edgeListingsUrl || '',
-        descriptionsPath: 'descriptions.json', termsPath: 'search-terms.json',
-      }, null, 2));
-      await writeFile(DESCRIPTIONS, body.copy || '');
-      await writeFile(TERMS, body.terms || '');
-      log('已保存链接、描述与搜索词。');
-      sendJson(res, { ok: true }); return;
+      const r = await serialized(async () => {
+        const { name, paths } = await activeProject();
+        // 必须带项目名且与当前一致：① 切换瞬间残留的防抖保存带旧名 → 拒，免得 A 串写进 B；
+        // ② 不带名（如 /state 加载失败后表单是空的）→ 也拒，免得空表单清空真实项目。
+        if (body.project !== name) {
+          log(`忽略一次过期保存（来自项目「${body.project || '(空)'}」，当前是「${name}」）。`);
+          return { ok: false, error: 'stale project' };
+        }
+        await writeFile(paths.config, JSON.stringify({
+          chromeEditUrl: body.chromeEditUrl || '', edgeListingsUrl: body.edgeListingsUrl || '',
+          firefoxEditUrl: body.firefoxEditUrl || '',
+        }, null, 2));
+        await writeFile(paths.descriptions, body.copy || '');
+        await writeFile(paths.terms, body.terms || '');
+        log('已保存链接、描述与搜索词。');
+        return { ok: true };
+      });
+      sendJson(res, r); return;
+    }
+    if (req.method === 'POST' && url.pathname.startsWith('/projects/')) {
+      const body = JSON.parse(await readBody(req));
+      const action = url.pathname.slice('/projects/'.length);
+      const r = await serialized(async () => {
+        // busy 检查放在锁内、readBody 之后：原先在 readBody 前检查，等待请求体期间
+        // /run 可能已开跑（doRun 已缓存项目路径），改名/删除会从它脚下抽走目录。
+        if (busy) return { ok: false, error: '正在填充中，请先停止再操作项目。' };
+        if (action === 'select') {
+          const list = await listProjects(ROOT);
+          if (!list.includes(body.name)) return { ok: false, error: '项目不存在: ' + body.name };
+          await setActive(ROOT, body.name);
+          log(`已切换到项目「${body.name}」。`);
+          return { ok: true };
+        }
+        if (action === 'create') {
+          const cr = await createProject(ROOT, body.name);
+          if (cr.ok) { await setActive(ROOT, cr.name); log(`已新建项目「${cr.name}」并切换。`); }
+          return cr;
+        }
+        if (action === 'rename') {
+          const rr = await renameProject(ROOT, body.from, body.to);
+          if (rr.ok) log(`项目「${body.from}」已改名为「${rr.name}」。`);
+          return rr;
+        }
+        if (action === 'delete') {
+          const dr = await deleteProject(ROOT, body.name);
+          if (dr.ok) { await getActive(ROOT); log(`已删除项目「${body.name}」。`); } // getActive 顺手修复 active/重建 default
+          return dr;
+        }
+        return { ok: false, error: '未知操作' };
+      });
+      sendJson(res, r); return;
     }
     if (req.method === 'POST' && url.pathname === '/login') { doLogin(); sendJson(res, { ok: true }); return; }
     if (req.method === 'POST' && url.pathname === '/stop') {
@@ -176,7 +305,10 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'POST' && url.pathname === '/run') {
       const body = JSON.parse(await readBody(req));
-      doRun(body.store || 'all'); // 异步跑，日志走 SSE
+      // 显式传了 units（哪怕空数组）就按 units 走——空数组应是「没选目标」，
+      // 不能再用 store:'all' 兜底，否则「什么都不选」会被翻转成「全填四个后台」。
+      // 只有完全没带 units 字段的旧式请求才回退 store。
+      doRun('units' in body ? { units: body.units } : { store: body.store || 'all' }); // 异步跑，日志走 SSE
       sendJson(res, { ok: true }); return;
     }
     if (req.method === 'GET' && url.pathname === '/events') {
