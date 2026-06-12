@@ -120,11 +120,14 @@ export function canonLocale(s) {
 // 用文案数据 + 后台实际提供的 locale 列表（后台顺序），产出有序填充队列与差异报告。
 // 匹配按归一化形式进行，但 queue 里的 locale 用“后台”的写法（适配器据此定位元素）。
 export function buildFillQueue(data, dashboardLocales) {
-  // canon(用户键) -> 文案（同一归一化键多次出现时，先到先得）
+  // canon(用户键) -> 文案。同一归一化键多次出现（如 zh_CN 与 zh-CN 并存）时先到先得，
+  // 后到的记进 duplicates——静默丢弃会让用户更新了乙文案、商店里却是甲，且无从察觉。
   const byCanon = new Map();
+  const duplicates = [];
   for (const [k, v] of Object.entries(data)) {
     const c = canonLocale(k);
     if (!byCanon.has(c)) byCanon.set(c, v);
+    else duplicates.push(k);
   }
   const queue = [];
   const missing = []; // 后台有该语言，但文案里没有
@@ -139,7 +142,7 @@ export function buildFillQueue(data, dashboardLocales) {
   // 文案里有但后台没有的语言（按归一化比较）
   const dashCanon = new Set(dashboardLocales.map(canonLocale));
   const extra = Object.keys(data).filter((k) => !dashCanon.has(canonLocale(k)));
-  return { queue, missing, extra };
+  return { queue, missing, extra, duplicates };
 }
 
 // 把“locale 码 -> 后台显示名”映射，对到后台真实按钮（每个 { ariaLabel, name }，name=显示名），

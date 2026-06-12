@@ -10,6 +10,7 @@
     "login": "node playwright/run.mjs --login",
     "chrome": "node playwright/run.mjs --store chrome",
     "edge": "node playwright/run.mjs --store edge",
+    "firefox": "node playwright/run.mjs --store firefox",
     "all": "node playwright/run.mjs --store all"
   },
   "devDependencies": {

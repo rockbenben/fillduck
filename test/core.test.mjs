@@ -50,6 +50,12 @@ test('buildFillQueue: 按后台顺序产出队列', () => {
   assert.deepEqual(r.extra, []);
 });
 
+test('buildFillQueue: 归一化后相同的重复键进 duplicates，不静默丢', () => {
+  const r = buildFillQueue({ zh_CN: '甲', 'zh-CN': '乙' }, ['zh-CN']);
+  assert.deepEqual(r.queue, [{ locale: 'zh-CN', text: '甲' }]);
+  assert.deepEqual(r.duplicates, ['zh-CN']);
+});
+
 test('buildFillQueue: 后台有但文案缺 -> missing', () => {
   const r = buildFillQueue({ en: 'E' }, ['en', 'fr']);
   assert.deepEqual(r.queue, [{ locale: 'en', text: 'E' }]);

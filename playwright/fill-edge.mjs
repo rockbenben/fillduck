@@ -49,13 +49,26 @@ async function backToList(page, cfg, ui) {
   await page.getByRole('button', { name: ui.editRole }).first().waitFor({ timeout: 30000 });
 }
 
-// 重开弹层读回当前描述（描述慢加载，轮询到非空），读完回列表
-async function readBack(page, cfg, ui, editAria) {
+// 异常后的兜底恢复：弹层可能残留在打开态，挡住下一个语言的「编辑」按钮——
+// 不恢复的话，一次偶发超时会让后续每个语言都点不到按钮、30s×多轮全部假失败。
+// 按 Esc 关弹层并短等列表回来；失败不另报错（下一次 openModal 的超时会自然暴露）。
+export async function recoverToList(page, ui) {
+  try {
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: ui.editRole }).first().waitFor({ timeout: 5000 });
+  } catch { /* 留给下一步的超时去暴露 */ }
+}
+
+// 重开弹层读回当前描述，读完回列表。落库是异步的：存完立刻读回常常还是【旧值】——
+// 更新场景下旧值同样非空，按“非空”停轮询会立刻拿到旧文案、误判“读回不符”。
+// 所以轮询到值等于期望（expected）才停；超时返回最后读到的值，由调用方比对定夺。
+async function readBack(page, cfg, ui, editAria, expected) {
   const ta = await openModal(page, cfg, editAria);
+  const want = (expected || '').trim();
   let v = '';
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 24; i++) { // 最多 ~12s，命中即停
     v = ((await ta.inputValue().catch(() => '')) || '');
-    if (v.trim().length > 0) break;
+    if (want ? v.trim() === want : v.trim().length > 0) break;
     await page.waitForTimeout(500);
   }
   await backToList(page, cfg, ui);
@@ -66,7 +79,9 @@ async function readBack(page, cfg, ui, editAria) {
 // 第 1 次走快速路径 keyboard.insertText：单次 CDP 调用产生【可信】input 事件（等价 IME/粘贴提交，
 // 不是 fill() 那种合成事件，Edge 认），耗时与文本长度无关；末字符仍用真实击键补一次 keydown/keyup。
 // 若没生效，后续尝试回退【真实键盘逐字输入】（等价手动打字，慢但最稳）。
+// 返回 { ok, reason }：reason 区分“值没留住”与“保存键未启用”，日志可定位是输入问题还是表单校验问题。
 async function fillUntilSavable(page, ta, save, text) {
+  let reason = '';
   for (let a = 0; a < 3; a++) {
     await ta.click();                       // 聚焦
     await page.keyboard.press(SELECT_ALL);   // 全选
@@ -78,12 +93,19 @@ async function fillUntilSavable(page, ta, save, text) {
       await ta.pressSequentially(text, { delay: 0 }); // 逐字真实输入
     }
     await ta.evaluate((e) => e.blur());
-    await page.waitForTimeout(500);
-    const stuck = ((await ta.inputValue().catch(() => '')) || '').trim() === text.trim();
-    const enabled = !(await save.isDisabled().catch(() => true));
-    if (stuck && enabled) return true;
+    // 保存键的启用常滞后于 blur（Angular 校验异步）：短首查 + 密集轮询最多 ~2.6s。
+    // 过早放弃会触发整段清空重打（长文案很贵）；但常见情况毫秒级就绪，别按 500ms 粗粒度白等。
+    let stuck = false;
+    for (let t = 0; t < 11; t++) {
+      await page.waitForTimeout(t === 0 ? 150 : 250);
+      stuck = ((await ta.inputValue().catch(() => '')) || '').trim() === text.trim();
+      const enabled = !(await save.isDisabled().catch(() => true));
+      if (stuck && enabled) return { ok: true };
+      if (!stuck) break; // 值都没留住，再等保存键也没意义，直接重打
+    }
+    reason = stuck ? '保存键未启用' : '值未留住';
   }
-  return false;
+  return { ok: false, reason };
 }
 
 // 填 + 存，不在这里核对。返回 'submitted' | 'unchanged' | 'no-save-button'
@@ -94,11 +116,13 @@ async function fillAndSaveOne(page, cfg, ui, editAria, text) {
 
   const save = page.getByRole('button', { name: ui.save, exact: true });
   const savable = await fillUntilSavable(page, ta, save, text);
-  if (!savable) { await backToList(page, cfg, ui); return 'no-save-button'; }
+  if (!savable.ok) { await backToList(page, cfg, ui); return savable.reason || 'no-save-button'; }
 
   // insertText 几乎瞬时完成，Angular 把新值同步进表单模型可能有去抖延迟；
-  // 立刻点保存会提交旧值（界面是新的、存的是旧的）。留 1s 让模型同步完。
-  await page.waitForTimeout(1000);
+  // 立刻点保存会提交旧值（界面是新的、存的是旧的）。模型状态无法从外部观测，只能盲等：
+  // 随文案长度温和放大、上限 2s——读回核对 + 重试轮已能兜住偶发的“存了旧值”，
+  // 不必为罕见慢同步让每种语言都睡满 3s（20 语言一轮就是一分钟纯睡眠）。
+  await page.waitForTimeout(Math.min(2000, 800 + Math.ceil(text.length / 4)));
   await save.click();
   // 等提交信号（保存键变灰 / 弹层消失），最多 ~15s，然后再给服务端落库留点时间
   const descVisible = `${cfg.descriptionField}:visible`;
@@ -111,10 +135,11 @@ async function fillAndSaveOne(page, cfg, ui, editAria, text) {
   return 'submitted';
 }
 
-export async function fillEdge(page, data, log, shouldStop) {
+// 两个 Edge 填充器（描述 / 搜索词）共用的准备阶段：识别界面语言（非中英强制英文重载）→
+// 构建 ui 与 locale 显示名表 → 匹配语言行编辑按钮 → 建填充队列。返回 { ui, map, codeToAria, queue }。
+// label 作日志前缀（'Edge 描述' / 'Edge 搜索词'）；warnUnknown 仅描述阶段提示后台未收录的语言。
+export async function prepareEdge(page, data, log, { label, warnUnknown }) {
   const cfg = SELECTORS.edge;
-
-  // 识别界面语言；既非中文也非英文则强制英文重载再试。
   // 首次给 60s（登录跳转后列表渲染可能很慢）；重载后已是热页面，20s 足够。
   let lang = await detectEdgeLang(page, cfg.editButtonRoleName, 60000);
   if (!lang) {
@@ -123,9 +148,9 @@ export async function fillEdge(page, data, log, shouldStop) {
     lang = await detectEdgeLang(page, cfg.editButtonRoleName, 20000);
   }
   if (!lang) {
-    throw new Error('没等到 Edge 的语言列表。请检查：① 链接是 …/listings 结尾的页面；② 已登录 Microsoft；③ 网络正常。');
+    throw new Error(`没等到语言列表（${label}）。请检查：① 链接是 …/listings 结尾的页面；② 已登录 Microsoft；③ 网络正常。`);
   }
-  log(`Edge 界面语言：${lang === 'en' ? '英文' : '中文'}`);
+  log(`${label}：界面语言 ${lang === 'en' ? '英文' : '中文'}`);
   const ui = {
     editRole: cfg.editButtonRoleName[lang],
     editRegex: cfg.editButtonRegex[lang],
@@ -137,18 +162,26 @@ export async function fillEdge(page, data, log, shouldStop) {
   for (const [code, obj] of Object.entries(cfg.localeToRowName)) map[code] = obj[lang];
 
   const buttons = await edgeEditButtons(page, ui);
-
   // 先精确再子串、且有文案的 locale 优先占位（细节见 core.matchLocaleButtons）。
   const dataCanon = new Set(Object.keys(data).map(canonLocale));
   const codeToAria = matchLocaleButtons(map, buttons, dataCanon);
-  const usedAria = new Set(Object.values(codeToAria));
-  const unknown = [...new Set(buttons.filter((b) => !usedAria.has(b.ariaLabel)).map((b) => b.name))];
-  if (unknown.length) log(`⚠️ Edge 上这些语言尚未收录、已跳过：${unknown.join('、')}（发我一句即可加上）`);
+  if (warnUnknown) {
+    const usedAria = new Set(Object.values(codeToAria));
+    const unknown = [...new Set(buttons.filter((b) => !usedAria.has(b.ariaLabel)).map((b) => b.name))];
+    if (unknown.length) log(`⚠️ Edge 上这些语言尚未收录、已跳过：${unknown.join('、')}（发我一句即可加上）`);
+  }
 
   const present = Object.keys(codeToAria);
-  const { queue, missing, extra } = buildFillQueue(data, present);
-  if (extra.length) log(`Edge 忽略(无此语言)：${extra.join(', ')}`);
-  if (missing.length) log(`Edge 缺文案，跳过：${missing.join(', ')}`);
+  const { queue, missing, extra, duplicates } = buildFillQueue(data, present);
+  if (extra.length) log(`${label}忽略(无此语言)：${extra.join(', ')}`);
+  if (missing.length) log(`${label}缺文案，跳过：${missing.join(', ')}`);
+  if (duplicates.length) log(`⚠️ ${label}里这些键与前面的键指向同一语言、已忽略：${duplicates.join(', ')}`);
+  return { ui, map, codeToAria, queue };
+}
+
+export async function fillEdge(page, data, log, shouldStop) {
+  const cfg = SELECTORS.edge;
+  const { ui, map, codeToAria, queue } = await prepareEdge(page, data, log, { label: 'Edge 描述', warnUnknown: true });
 
   let pending = [];
   for (const q of queue) {
@@ -157,6 +190,7 @@ export async function fillEdge(page, data, log, shouldStop) {
   }
 
   const failed = [];
+  const attempted = pending.length; // 过完 250 字门槛真正要填的数量：为 0 时结尾不能宣称“全部已保存”
   if (pending.length) log(`Edge：先逐个保存全部 ${pending.length} 种，保存完统一核对，没过的自动重试`);
   for (let pass = 1; pass <= 3 && pending.length; pass++) {
     if (pass > 1) log(`Edge 第 ${pass} 轮（上一轮 ${pending.length} 种未核对通过）`);
@@ -171,7 +205,7 @@ export async function fillEdge(page, data, log, shouldStop) {
       log(`Edge 保存 ${i + 1}/${pending.length}：${label}`);
       let r;
       try { r = await fillAndSaveOne(page, cfg, ui, codeToAria[locale], text); }
-      catch (e) { r = 'error: ' + e.message; }
+      catch (e) { r = 'error: ' + e.message.split('\n')[0]; await recoverToList(page, ui); }
       if (r === 'unchanged') log(`  ${locale} 内容已是最新，无需保存`);
       else if (r === 'submitted') toVerify.push(pending[i]);
       else if (pass < 3) { nextPending.push(pending[i]); log(`  ⚠️ ${label} 没保存成（${r}），下一轮再试`); }
@@ -185,7 +219,8 @@ export async function fillEdge(page, data, log, shouldStop) {
       for (const item of toVerify) {
         if (shouldStop && shouldStop()) { log('⏹ 已停止（Edge）'); return; }
         let got = '';
-        try { got = await readBack(page, cfg, ui, codeToAria[item.locale]); } catch (e) { got = ''; }
+        try { got = await readBack(page, cfg, ui, codeToAria[item.locale], item.text); }
+        catch (e) { got = ''; await recoverToList(page, ui); }
         if (got === item.text.trim()) log(`  ✅ ${item.locale} 核对通过`);
         else if (pass < 3) { nextPending.push(item); log(`  ${item.locale} 读回与目标不符，下一轮重试`); }
         else failed.push(`${item.locale}(读回不符)`);
@@ -195,5 +230,6 @@ export async function fillEdge(page, data, log, shouldStop) {
   }
 
   if (failed.length) log(`Edge 完成。⚠️ 这些没存上，需人工处理：${failed.join(', ')}`);
+  else if (!attempted) log('⚠️ Edge：没有符合条件的描述可填（原因见上方跳过提示），后台未做任何修改。');
   else log('Edge 完成：全部已保存并核对通过。');
 }

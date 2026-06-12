@@ -1,8 +1,7 @@
 // Edge 搜索词填充：与描述填充同级、独立一遍。每语言：开弹层 → 清空已有词 → 逐个加新词 → 保存草稿 → 重开读回核对。
 // 选择器全部结构化、与界面语言无关（见 selectors.mjs 的 edge.searchTerm）。复用语言探测与按钮匹配。
 import { SELECTORS } from '../src/selectors.mjs';
-import { buildFillQueue, forceDashboardLang, canonLocale, matchLocaleButtons } from '../src/core.mjs';
-import { detectEdgeLang, edgeEditButtons } from './fill-edge.mjs';
+import { prepareEdge, recoverToList } from './fill-edge.mjs';
 
 // 打开某语言编辑弹层，等“搜索词”区出现。
 async function openTermsModal(page, st, editAria) {
@@ -22,6 +21,14 @@ async function backToList(page, ui) {
 async function readChips(page, st) {
   return page.locator(`${st.chip} ${st.chipText}`).evaluateAll((els) =>
     els.map((e) => (e.textContent || '').trim()).filter(Boolean));
+}
+
+// 词集合相等（顺序无关）。注意必须是真正的集合相等：之前用的「长度相等 + 并集大小不变」
+// 是子集判断，chips 含重复词时（如 ['a','a'] vs 目标 ['a','b']）会误判相等、漏掉没存上的词。
+function sameTermSet(a, b) {
+  if (a.length !== b.length) return false;
+  const B = new Set(b);
+  return new Set(a).size === B.size && a.every((x) => B.has(x));
 }
 
 // 清空当前弹层所有已有词：逐个点删除，直到没有（有上限防意外死循环）。
@@ -62,9 +69,7 @@ async function fillTermsOne(page, st, ui, editAria, terms) {
   await openTermsModal(page, st, editAria);
   const current = (await readChips(page, st)).map((s) => s.trim());
   const target = terms.map((s) => s.trim());
-  // 集合相等（顺序无关）则无需改动
-  const same = current.length === target.length && new Set(current).size === new Set([...current, ...target]).size;
-  if (same) { await backToList(page, ui); return 'unchanged'; }
+  if (sameTermSet(current, target)) { await backToList(page, ui); return 'unchanged'; }
 
   if (!(await clearChips(page, st))) { await backToList(page, ui); return 'error: 清空未尽'; }
   await addTerms(page, st, target);
@@ -83,50 +88,26 @@ async function fillTermsOne(page, st, ui, editAria, terms) {
   return 'submitted';
 }
 
-// 重开读回当前语言的词集合
-async function readBackTerms(page, st, ui, editAria) {
+// 重开读回当前语言的词集合。落库异步：刚存完读到的常是【旧词】（更新场景下同样非空），
+// 按“非空”停轮询会误判不符。轮询到集合等于期望（顺序无关）才停；超时返回最后一次读到的。
+async function readBackTerms(page, st, ui, editAria, expected) {
   await openTermsModal(page, st, editAria);
+  const want = (expected || []).map((s) => s.trim());
   let chips = [];
-  for (let i = 0; i < 12; i++) {
-    chips = await readChips(page, st);
-    if (chips.length) break;
+  for (let i = 0; i < 24; i++) { // 最多 ~10s，命中即停
+    chips = (await readChips(page, st)).map((s) => s.trim());
+    if (want.length ? sameTermSet(chips, want) : chips.length > 0) break;
     await page.waitForTimeout(400);
   }
   await backToList(page, ui);
-  return chips.map((s) => s.trim());
+  return chips;
 }
 
 export async function fillEdgeSearchTerms(page, data, log, shouldStop) {
   const cfg = SELECTORS.edge;
   const st = cfg.searchTerm;
-
-  // 识别界面语言（搜索词选择器虽语言无关，但语言探测/保存键/语言名表仍按界面语言）。
-  let lang = await detectEdgeLang(page, cfg.editButtonRoleName, 60000);
-  if (!lang) {
-    log('Edge 界面非中/英，强制英文重载…');
-    await page.goto(forceDashboardLang(page.url(), 'en'), { waitUntil: 'load' }).catch(() => {});
-    lang = await detectEdgeLang(page, cfg.editButtonRoleName, 20000);
-  }
-  if (!lang) throw new Error('没等到 Edge 的语言列表（搜索词阶段）。请检查链接/登录/网络。');
-  log(`Edge 搜索词：界面语言 ${lang === 'en' ? '英文' : '中文'}`);
-
-  const ui = {
-    editRole: cfg.editButtonRoleName[lang],
-    editRegex: cfg.editButtonRegex[lang],
-    save: cfg.saveButtonText[lang],
-    close: cfg.closeButtonText[lang],
-  };
-  const map = {};
-  for (const [code, obj] of Object.entries(cfg.localeToRowName)) map[code] = obj[lang];
-
-  const buttons = await edgeEditButtons(page, ui);
-  const dataCanon = new Set(Object.keys(data).map(canonLocale));
-  const codeToAria = matchLocaleButtons(map, buttons, dataCanon);
-
-  const present = Object.keys(codeToAria);
-  const { queue, missing, extra } = buildFillQueue(data, present);
-  if (extra.length) log(`Edge 搜索词忽略(无此语言)：${extra.join(', ')}`);
-  if (missing.length) log(`Edge 搜索词缺数据，跳过：${missing.join(', ')}`);
+  // 与描述阶段共用准备（语言探测/按钮匹配/队列）；搜索词选择器虽语言无关，但保存键/语言名表仍按界面语言。
+  const { ui, map, codeToAria, queue } = await prepareEdge(page, data, log, { label: 'Edge 搜索词', warnUnknown: false });
 
   // 只填“有词”的语言（空数组的跳过，不清空后台——避免误删用户已有词）。
   let pending = queue.filter((q) => Array.isArray(q.text) && q.text.length > 0);
@@ -134,6 +115,7 @@ export async function fillEdgeSearchTerms(page, data, log, shouldStop) {
   if (skipped.length) log(`Edge 搜索词为空、跳过：${skipped.join(', ')}`);
 
   const failed = [];
+  const attempted = pending.length; // 为 0 时（全部语言搜索词为空被跳过）结尾不能宣称“全部已保存”
   if (pending.length) log(`Edge 搜索词：逐个填+存全部 ${pending.length} 种，存完统一核对`);
   for (let pass = 1; pass <= 3 && pending.length; pass++) {
     if (pass > 1) log(`Edge 搜索词第 ${pass} 轮（上一轮 ${pending.length} 种未通过）`);
@@ -146,7 +128,7 @@ export async function fillEdgeSearchTerms(page, data, log, shouldStop) {
       log(`Edge 搜索词 ${i + 1}/${pending.length}：${label} — ${text.length} 个`);
       let r;
       try { r = await fillTermsOne(page, st, ui, codeToAria[locale], text); }
-      catch (e) { r = 'error: ' + e.message; }
+      catch (e) { r = 'error: ' + e.message.split('\n')[0]; await recoverToList(page, ui); }
       if (r === 'unchanged') log(`  ${locale} 搜索词已是最新`);
       else if (r === 'submitted') toVerify.push(pending[i]);
       else if (pass < 3) { nextPending.push(pending[i]); log(`  ⚠️ ${label} 没存成（${r}），下一轮再试`); }
@@ -158,9 +140,10 @@ export async function fillEdgeSearchTerms(page, data, log, shouldStop) {
       for (const item of toVerify) {
         if (shouldStop && shouldStop()) { log('⏹ 已停止（Edge 搜索词）'); return; }
         let got = [];
-        try { got = await readBackTerms(page, st, ui, codeToAria[item.locale]); } catch (e) { got = []; }
+        try { got = await readBackTerms(page, st, ui, codeToAria[item.locale], item.text); }
+        catch (e) { got = []; await recoverToList(page, ui); }
         const want = item.text.map((s) => s.trim());
-        const ok = got.length === want.length && new Set([...got, ...want]).size === new Set(want).size;
+        const ok = sameTermSet(got, want);
         if (ok) log(`  ✅ ${item.locale} 搜索词核对通过`);
         else if (pass < 3) { nextPending.push(item); log(`  ${item.locale} 读回不符（实得 ${got.length} 个），下一轮重试`); }
         else failed.push(`${item.locale}(读回不符)`);
@@ -170,5 +153,6 @@ export async function fillEdgeSearchTerms(page, data, log, shouldStop) {
   }
 
   if (failed.length) log(`Edge 搜索词完成。⚠️ 这些没存上，需人工处理：${failed.join(', ')}`);
+  else if (!attempted) log('⚠️ Edge 搜索词：没有可填的语言（原因见上方跳过提示），后台未做任何修改。');
   else log('Edge 搜索词完成：全部已保存并核对通过。');
 }

@@ -8,3 +8,7 @@ config.json
 descriptions.json
 search-terms.json
 copy.json
+projects/
+.claude/
+docs/superpowers/
+e2e-probe.mjs

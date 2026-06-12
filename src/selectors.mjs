@@ -101,4 +101,26 @@ export const SELECTORS = {
       te: { zh: '泰卢固语', en: 'Telugu' },
     },
   },
+  firefox: {
+    // 命中 AMO 开发者后台编辑页 …/developers/addon/<slug>/edit（2026-06-12 真机采集确认）
+    urlPattern: '/developers/addon/',
+    // 「描述附加组件」区块及其「编辑」按钮（点击后 AJAX 换入表单，无跳转）
+    describeSection: '#addon-edit-describe',
+    describeEditButton: '#addon-edit-describe h3 a.button',
+    // 编辑表单（action 含 edit_describe，与界面语言无关）。
+    // 所有语言的 description_<locale> textarea 同时在表单里（非当前语言 display:none），一次提交保存全部。
+    describeForm: 'form[action*="edit_describe"]',
+    descriptionByLocale: (loc) => `textarea[name="description_${loc}"]`,
+    // l10n 菜单：点 changeLocale 开弹窗，点 a[href="#<locale>"] 会动态创建该语言的字段。
+    // locale 码在弹窗 href 里是小写连字符（#zh-tw / #pt-br / #nb-no），与字段名一致。
+    changeLocale: '#change-locale',
+    localePopup: '#locale-popup',
+    localeLink: (loc) => `#locale-popup a[href="#${loc}"]`,
+    // 弹窗里全部语言链接（默认/现有/新语言三组并集）= AMO 支持的语言集
+    allLocaleLinks: '#locale-popup a[href^="#"]',
+    // 表单校验错误（保存失败时停留编辑态并内联展示）
+    errorList: 'form[action*="edit_describe"] .errorlist li',
+    // 描述上限（AMO textarea maxlength；程序化赋值不受其约束，须自行检查）
+    descriptionMax: 15000,
+  },
 };
