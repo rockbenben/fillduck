@@ -83,8 +83,9 @@ export async function setActive(root, name) {
   await writeFile(rootConfig(root), JSON.stringify({ activeProject: name }, null, 2));
 }
 
-// 总是返回一个【存在的】项目名：active 失效回退第一个并写回；一个不剩则重建空 default。
-export async function getActive(root) {
+// 一次 readdir 同时拿到项目列表与当前 active（active 失效时回退第一个并写回；一个不剩则重建空 default）。
+// /state 一次请求既要列表又要 active，走这个避免连读两遍目录。
+export async function activeAndList(root) {
   let list = await listProjects(root);
   if (list.length === 0) {
     await mkdir(projectPaths(root, DEFAULT_NAME).dir, { recursive: true });
@@ -93,7 +94,12 @@ export async function getActive(root) {
   const cfg = (await readJsonSafe(rootConfig(root))) || {};
   let name = typeof cfg.activeProject === 'string' ? cfg.activeProject : '';
   if (!list.includes(name)) { name = list[0]; await setActive(root, name); }
-  return name;
+  return { name, list };
+}
+
+// 总是返回一个【存在的】项目名：active 失效回退第一个并写回；一个不剩则重建空 default。
+export async function getActive(root) {
+  return (await activeAndList(root)).name;
 }
 
 // 重名判定不分大小写：Windows/macOS 文件系统不分大小写，mkdir('Test') 会静默合并进

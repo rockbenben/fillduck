@@ -5,9 +5,10 @@ import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { parseInput, parseTerms } from '../src/core.mjs';
 import {
-  migrateIfNeeded, listProjects, getActive, setActive,
+  migrateIfNeeded, listProjects, getActive, setActive, activeAndList,
   createProject, renameProject, deleteProject, projectPaths,
   readJsonSafe, readTextSafe,
 } from '../src/projects.mjs';
@@ -37,19 +38,28 @@ const loginPages = new Map(); // 'chrome'|'edge'|'firefox' -> 本工具为该后
 let busy = false;
 let cancelRequested = false; // 停止标志：填充循环每项开始前检查
 const clients = new Set(); // SSE 连接
-const logBuffer = [];
+const logBuffer = [];       // { seq, msg }
+const SSE_EPOCH = randomUUID(); // 本次进程启动标识：写进事件 id 前缀，客户端据此识别“服务重启”并清屏重来。
+// 用 UUID 而非 Date.now()：两次启动落在同一毫秒会撞出相同 epoch，客户端认不出重启、maxSeq 不复位，
+// 新进程从 seq=1 起的日志全被当成“已见过”而丢弃、面板假死。UUID 每次进程必不同，杜绝这种碰撞。
+let logSeq = 0;              // 日志单调序号：客户端用 Last-Event-ID 只补拉断线期间漏掉的行，既不清屏也不重复
 
-function broadcast(obj) {
-  const line = `data: ${JSON.stringify(obj)}\n\n`;
+// SSE 一帧：日志帧带 id（epoch.seq），状态帧不带（状态帧不能推进 Last-Event-ID，否则重连会漏发日志）。
+function sseFrame(obj, id) { return (id ? `id: ${id}\n` : '') + `data: ${JSON.stringify(obj)}\n\n`; }
+function broadcast(obj, id) {
+  const line = sseFrame(obj, id);
   for (const res of clients) { try { res.write(line); } catch (e) { /* 忽略断开 */ } }
 }
 function log(msg) {
-  logBuffer.push(msg);
+  const seq = ++logSeq;
+  logBuffer.push({ seq, msg });
   if (logBuffer.length > 800) logBuffer.shift();
   console.log(msg); // 同时打到黑窗口，方便排查
-  broadcast({ type: 'log', msg });
+  // epoch/seq 也放进 JSON：状态帧不带 id（不能推进 Last-Event-ID），客户端靠 JSON 里的 epoch 才能
+  // 在“重启后首帧只是空缓冲的状态帧”时也及时清屏；seq 供客户端单调去重（Last-Event-ID 被抹掉时兜底）。
+  broadcast({ type: 'log', msg, epoch: SSE_EPOCH, seq }, `${SSE_EPOCH}.${seq}`);
 }
-function setStatus(status) { broadcast({ type: 'status', status }); }
+function setStatus(status) { broadcast({ type: 'status', status, epoch: SSE_EPOCH }); }
 
 // 当前激活项目的名字与文件路径（active 失效时 getActive 会自动回退修复）。
 async function activeProject() {
@@ -106,7 +116,7 @@ async function doLogin() {
       const first = c.pages()[0];
       let p;
       if (fallbackFirst && first && first.url() === 'about:blank' && ![...loginPages.values()].includes(first)) {
-        p = first; // 启动时的空白首页给 Chrome 用，与原行为一致
+        p = first; // 启动时的空白首页给【第一个要打开的后台】复用，避免它一直空挂着
       } else {
         p = await c.newPage();
       }
@@ -115,10 +125,13 @@ async function doLogin() {
     };
     // 三个后台页并行加载：串行 goto 时 Firefox 页要等前两个重型后台 load 完才开始，多等 10~30s。
     // pageFor 依次 await 完成分配后再并行 goto，分配阶段无竞态。
+    // 启动空白页只由第一个真正要开的后台认领（此前写死给 Chrome，只配了 Edge/Firefox 时空白页永远空挂）。
     const opens = [];
-    if (cfg.chromeEditUrl) opens.push((await pageFor('chrome', true)).goto(cfg.chromeEditUrl).catch((e) => log('Chrome 打开失败：' + e.message)));
-    if (cfg.edgeListingsUrl) opens.push((await pageFor('edge')).goto(cfg.edgeListingsUrl).catch((e) => log('Edge 打开失败：' + e.message)));
-    if (cfg.firefoxEditUrl) opens.push((await pageFor('firefox')).goto(cfg.firefoxEditUrl).catch((e) => log('Firefox 打开失败：' + e.message)));
+    let firstOpen = true;
+    const claimBlank = () => { const f = firstOpen; firstOpen = false; return f; };
+    if (cfg.chromeEditUrl) opens.push((await pageFor('chrome', claimBlank())).goto(cfg.chromeEditUrl).catch((e) => log('Chrome 打开失败：' + e.message)));
+    if (cfg.edgeListingsUrl) opens.push((await pageFor('edge', claimBlank())).goto(cfg.edgeListingsUrl).catch((e) => log('Edge 打开失败：' + e.message)));
+    if (cfg.firefoxEditUrl) opens.push((await pageFor('firefox', claimBlank())).goto(cfg.firefoxEditUrl).catch((e) => log('Firefox 打开失败：' + e.message)));
     await Promise.all(opens);
   } catch (e) {
     log('❌ 登录启动失败：' + e.message);
@@ -153,8 +166,23 @@ async function doRun(input) {
     const termsParsed = termsRaw.trim() ? parseTerms(termsRaw) : { ok: true, data: {} };
     if (descRaw.trim() && !descParsed.ok) log('描述 JSON 有问题：' + descParsed.error);
     if (termsRaw.trim() && !termsParsed.ok) log('搜索词 JSON 有问题：' + termsParsed.error);
-    const descData = descParsed.ok ? descParsed.data : {};
-    const termsData = termsParsed.ok ? termsParsed.data : {};
+    let descData = descParsed.ok ? descParsed.data : {};
+    let termsData = termsParsed.ok ? termsParsed.data : {};
+    // 语言子集：前端可只让部分语言生效（未传或非数组 = 全部）。描述与搜索词都按同一份白名单过滤，
+    // 这样取消勾选的语言既不写描述也不写搜索词。空数组 = 一种都没选，下面的“无内容”守卫会拦住。
+    if (Array.isArray(input.locales)) {
+      const allow = new Set(input.locales);
+      const pick = (obj) => Object.fromEntries(Object.entries(obj).filter(([k]) => allow.has(k)));
+      const beforeD = Object.keys(descData).length;
+      const beforeT = Object.keys(termsData).length;
+      descData = pick(descData);
+      termsData = pick(termsData);
+      const dropped = (beforeD - Object.keys(descData).length) + (beforeT - Object.keys(termsData).length);
+      // 报“实际命中的语言数”而非“勾选数”：勾选里可能有磁盘上并不存在的语言（前端状态与文件不同步），
+      // 用勾选数会与随后可能触发的“无内容”守卫自相矛盾。
+      const kept = new Set([...Object.keys(descData), ...Object.keys(termsData)]).size;
+      log(`按所选语言过滤：生效 ${kept} 种语言${dropped ? `，已排除未勾选的 ${dropped} 项` : ''}`);
+    }
     const hasDesc = Object.keys(descData).length > 0;
     const hasTerms = Object.keys(termsData).length > 0;
     if (!hasDesc && !hasTerms) { log('⚠️ 没有可填的内容：描述与搜索词都为空或有误。'); return; }
@@ -166,8 +194,8 @@ async function doRun(input) {
     const targetErrors = []; // 出错的目标：单个后台失败不拖累其余目标
     // 每个目标独立 try/catch：选「全部」时 Chrome 抛错不应让 Edge/Firefox 直接不跑。
     const runTarget = async (name, fn) => {
-      try { await fn(); ran++; }
-      catch (e) { targetErrors.push(name); log(`❌ ${name} 出错：${e.message}（继续跑其余目标）`); }
+      try { await fn(); ran++; return true; }
+      catch (e) { targetErrors.push(name); log(`❌ ${name} 出错：${e.message}（继续跑其余目标）`); return false; }
     };
     if (!cancelRequested && want('chrome-desc')) {
       if (!cfg.chromeEditUrl) log('没填 Chrome 链接，跳过。');
@@ -182,13 +210,30 @@ async function doRun(input) {
         if (want('edge-desc') && !hasDesc) log('Edge 描述：无文案可填，跳过。');
         if (want('edge-terms') && !hasTerms) log('Edge 搜索词：无数据可填，跳过。');
       } else {
-        await runTarget(doDesc && doTerms ? 'Edge' : doDesc ? 'Edge 描述' : 'Edge 搜索词', async () => {
+        // 描述与搜索词各自独立计入 ran / targetErrors。合成一个目标时，描述已写进草稿、
+        // 搜索词才失败会把整个 Edge 记成“全都没填”，从而误报“本次没有填充任何内容”——诱导用户
+        // 重跑或不信任已写入的描述草稿。两者共用同一个 Edge 页，只在首次真正要跑时打开一次。
+        // 描述与搜索词共用同一 Edge 页。若前一个单元出错，页面上可能残留打开的编辑弹层，挡住下一个
+        // 单元探测语言列表（会把本来数据没问题的搜索词也拖成“出错需重跑”）。故出错后给下一个单元
+        // 重新导航一次列表页清场，代价只是多一次加载、且仅在真出错时才付。
+        let edgeOpened = false;
+        let edgeDirty = false;
+        const openEdge = async () => {
           const p = await getP();
-          log('打开 Edge 后台…');
-          await p.goto(cfg.edgeListingsUrl, { waitUntil: 'load' });
-          if (!cancelRequested && doDesc) await fillEdge(p, descData, log, shouldStop);
-          if (!cancelRequested && doTerms) await fillEdgeSearchTerms(p, termsData, log, shouldStop);
-        });
+          if (!edgeOpened || edgeDirty) {
+            log(edgeDirty ? '重开 Edge 后台（清理上一步残留）…' : '打开 Edge 后台…');
+            await p.goto(cfg.edgeListingsUrl, { waitUntil: 'load' });
+            edgeOpened = true; edgeDirty = false;
+          }
+          return p;
+        };
+        if (!cancelRequested && doDesc) {
+          await runTarget('Edge 描述', async () => { await fillEdge(await openEdge(), descData, log, shouldStop); });
+          // 描述阶段结束后一律标记“脏”：fillEdge 收尾可能整页重载、停在弹层、或被弹回登录，
+          // 搜索词单元前重新导航一次列表页从干净状态开始（否则描述的收尾重载会把好好的搜索词也拖挂）。
+          edgeDirty = true;
+        }
+        if (!cancelRequested && doTerms) await runTarget('Edge 搜索词', async () => { await fillEdgeSearchTerms(await openEdge(), termsData, log, shouldStop); });
         if (want('edge-desc') && !hasDesc) log('Edge 描述：无文案可填，已跳过。');
         if (want('edge-terms') && !hasTerms) log('Edge 搜索词：无数据可填，已跳过。');
       }
@@ -199,7 +244,7 @@ async function doRun(input) {
       else await runTarget('Firefox', async () => { const p = await getP(); log('打开 Firefox 后台…'); await p.goto(cfg.firefoxEditUrl, { waitUntil: 'load' }); await fillFirefox(p, descData, log, shouldStop); });
     }
     if (cancelRequested) log('⏹ 已停止（已填的部分保留）。');
-    else if (ran === 0 && targetErrors.length === 0) log('⚠️ 没有可填充的目标：请确认所选后台的链接已填。');
+    else if (ran === 0 && targetErrors.length === 0) log('⚠️ 没有可填充的目标：请确认所选后台的链接已填、且对应的描述 / 搜索词不为空且格式正确。');
     else if (ran === 0) log(`❌ 全部目标都出错，本次没有填充任何内容：${targetErrors.join('、')}（浏览器保留现场）`);
     else if (targetErrors.length) log(`⚠️ 完成，但这些目标出错需重跑：${targetErrors.join('、')}（浏览器保留现场）`);
     else log('✅ 完成。请在浏览器里人工检查后提交。');
@@ -231,10 +276,13 @@ const server = http.createServer(async (req, res) => {
       // 读也入锁：writeFile 是「先截断再写」，锁外读会撞上半截文件——
       // 撕裂的文案被表单载入后，自动保存还会把半截内容写回磁盘固化成永久损坏。
       const snap = await serialized(async () => {
-        const { name, paths } = await activeProject();
+        // 一次 readdir 同时拿到列表与 active（原先 activeProject→getActive 已 readdir 一遍，
+        // 这里又 listProjects 一遍，等于每次 /state 读两遍 projects/ 目录）。
+        const { name, list } = await activeAndList(ROOT);
+        const paths = projectPaths(ROOT, name);
         const cfg = (await readJsonSafe(paths.config)) || {};
         return {
-          projects: await listProjects(ROOT), active: name,
+          projects: list, active: name,
           chromeEditUrl: cfg.chromeEditUrl || '', edgeListingsUrl: cfg.edgeListingsUrl || '',
           firefoxEditUrl: cfg.firefoxEditUrl || '',
           copy: await readTextSafe(paths.descriptions), terms: await readTextSafe(paths.terms),
@@ -307,16 +355,22 @@ const server = http.createServer(async (req, res) => {
       const body = JSON.parse(await readBody(req));
       // 显式传了 units（哪怕空数组）就按 units 走——空数组应是「没选目标」，
       // 不能再用 store:'all' 兜底，否则「什么都不选」会被翻转成「全填四个后台」。
-      // 只有完全没带 units 字段的旧式请求才回退 store。
-      doRun('units' in body ? { units: body.units } : { store: body.store || 'all' }); // 异步跑，日志走 SSE
+      // 只有完全没带 units 字段的旧式请求才回退 store。locales（可选）= 只让这些语言生效。
+      const payload = 'units' in body ? { units: body.units } : { store: body.store || 'all' };
+      if (Array.isArray(body.locales)) payload.locales = body.locales;
+      doRun(payload); // 异步跑，日志走 SSE
       sendJson(res, { ok: true }); return;
     }
     if (req.method === 'GET' && url.pathname === '/events') {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
-      // 重放历史日志 + 当前状态：拼成一段一次写出，避免逐条 write（最多 800 次）系统调用。字节与分帧不变。
+      // 断线重连时浏览器会带上 Last-Event-ID（epoch.seq）。同一进程内只补发它之后的日志，避免整段重复；
+      // epoch 不同说明服务重启过（客户端已看到的旧序号在新进程里无意义）→ 回放整段，客户端会据 epoch 变化清屏。
+      // 首次连接（无 Last-Event-ID）fromSeq=0，等同回放全部。拼成一段一次写出，避免逐条 write 的系统调用。
+      const [lastEpoch, lastSeqRaw] = String(req.headers['last-event-id'] || '').split('.');
+      const fromSeq = lastEpoch === String(SSE_EPOCH) ? (Number(lastSeqRaw) || 0) : 0;
       let replay = 'retry: 2000\n\n';
-      for (const m of logBuffer) replay += `data: ${JSON.stringify({ type: 'log', msg: m })}\n\n`;
-      replay += `data: ${JSON.stringify({ type: 'status', status: busy ? 'running' : 'idle' })}\n\n`;
+      for (const m of logBuffer) if (m.seq > fromSeq) replay += sseFrame({ type: 'log', msg: m.msg, epoch: SSE_EPOCH, seq: m.seq }, `${SSE_EPOCH}.${m.seq}`);
+      replay += `data: ${JSON.stringify({ type: 'status', status: busy ? 'running' : 'idle', epoch: SSE_EPOCH })}\n\n`;
       res.write(replay);
       clients.add(res);
       res.on('error', () => clients.delete(res)); // 客户端断开时写入会触发 error，捕获避免崩进程
