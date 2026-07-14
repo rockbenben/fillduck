@@ -75,6 +75,35 @@ async function readBack(page, cfg, ui, editAria, expected) {
   return v.trim();
 }
 
+// 重开读回并与目标比对，返回 { ok, got }：ok=是否真存住，got=实际读回值（读回抛错时为 null）。
+// 核对与重载兜底两处共用同一逻辑，避免 trim 规则 / 异常恢复 / 比对方式在两处各写一份日后分叉。
+// 读回抛错 → ok:false（不要退化成 got='' 再比对：否则核对一个目标本就为空的字段时，读回异常的空串
+// 会和空目标比成相等、把没存住的字段谎报为已存）。got 交给调用方在不符时打印差异诊断。
+async function verifyStored(page, cfg, ui, editAria, text) {
+  let got;
+  try { got = await readBack(page, cfg, ui, editAria, text); }
+  catch { await recoverToList(page, ui); return { ok: false, got: null }; }
+  return { ok: got === text.trim(), got };
+}
+
+// 读回不符时的精确诊断：把“读回不符”变成能定位病因的信息（Edge 后台无法直接观测，只能靠这个）。
+// 报告目标/读回字数、首个不同字符的位置与两侧片段，并判别常见形态：读到空 / 前缀截断 / 空白规范化 / 旧值残留。
+function describeMismatch(want, got) {
+  const w = (want || '').trim();
+  const g = (got == null ? '' : String(got)).trim();
+  if (got == null) return '读回失败（打不开弹层或读不到值）';
+  if (!g) return '读回=空（后台里这条是空的：多半没存进去，或读到了错误的字段）';
+  if (g === w) return '实际一致（比对口径问题）';
+  let i = 0;
+  while (i < w.length && i < g.length && w[i] === g[i]) i++;
+  const around = (s) => JSON.stringify(s.slice(Math.max(0, i - 8), i + 12));
+  let shape = '';
+  if (g === w.slice(0, g.length)) shape = ' → 读回是目标的前缀，疑似被后台截断';
+  else if (w === g.slice(0, w.length)) shape = ' → 读回比目标更长，末尾多了内容';
+  else if (w.replace(/\s+/g, '') === g.replace(/\s+/g, '')) shape = ' → 去掉空白/换行后一致，疑似被后台规范化';
+  return `目标 ${w.length} 字 / 读回 ${g.length} 字，首个不同在第 ${i} 字：目标[…]=${around(w)} 读回[…]=${around(g)}${shape}`;
+}
+
 // 填描述并反复确认值留住且保存键可点。
 // 第 1 次走快速路径 keyboard.insertText：单次 CDP 调用产生【可信】input 事件（等价 IME/粘贴提交，
 // 不是 fill() 那种合成事件，Edge 认），耗时与文本长度无关；末字符仍用真实击键补一次 keydown/keyup。
@@ -118,10 +147,16 @@ async function fillAndSaveOne(page, cfg, ui, editAria, text) {
   const savable = await fillUntilSavable(page, ta, save, text);
   if (!savable.ok) { await backToList(page, cfg, ui); return savable.reason || 'no-save-button'; }
 
-  // insertText 几乎瞬时完成，Angular 把新值同步进表单模型可能有去抖延迟；
-  // 立刻点保存会提交旧值（界面是新的、存的是旧的）。模型状态无法从外部观测，只能盲等：
-  // 随文案长度温和放大、上限 2s——读回核对 + 重试轮已能兜住偶发的“存了旧值”，
-  // 不必为罕见慢同步让每种语言都睡满 3s（20 语言一轮就是一分钟纯睡眠）。
+  // 点保存前，强制把 textarea 当前（正确的）值同步进 Angular 表单模型，再点保存。
+  // 病因（读回诊断实锤）：insertText 后立刻点保存会提交【旧值】——界面已是新文案、存进后台的却是上一版，
+  // 表现为读回到一段完全不同的旧文案（tr/ru 反复中招）。原先只靠盲等赌模型同步完，长文案偶尔等不够。
+  // 修法：主动派发 input/change 事件。Angular 的 DefaultValueAccessor 监听 input 时直接读 element.value
+  //（不校验 isTrusted），于是模型被强制刷成 textarea 里的完整新值，从根上消除“提交旧值”的竞态。
+  // 派发后仍留一段随长度温和放大的等待（上限 2s）给变更检测跑完，再点保存。
+  await ta.evaluate((el) => {
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  });
   await page.waitForTimeout(Math.min(2000, 800 + Math.ceil(text.length / 4)));
   await save.click();
   // 等提交信号（保存键变灰 / 弹层消失），最多 ~15s，然后再给服务端落库留点时间
@@ -189,7 +224,7 @@ export async function fillEdge(page, data, log, shouldStop) {
     pending.push(q);
   }
 
-  const failed = [];
+  const failed = []; // { locale, reason, item }：带 item.text，供收尾整页重载后再核对
   const attempted = pending.length; // 过完 250 字门槛真正要填的数量：为 0 时结尾不能宣称“全部已保存”
   if (pending.length) log(`Edge：先逐个保存全部 ${pending.length} 种，保存完统一核对，没过的自动重试`);
   for (let pass = 1; pass <= 3 && pending.length; pass++) {
@@ -209,7 +244,7 @@ export async function fillEdge(page, data, log, shouldStop) {
       if (r === 'unchanged') log(`  ${locale} 内容已是最新，无需保存`);
       else if (r === 'submitted') toVerify.push(pending[i]);
       else if (pass < 3) { nextPending.push(pending[i]); log(`  ⚠️ ${label} 没保存成（${r}），下一轮再试`); }
-      else { failed.push(`${locale}(${r})`); log(`  ⚠️ ${locale} 未能保存：${r}`); }
+      else { failed.push({ locale, reason: r, item: pending[i] }); log(`  ⚠️ ${locale} 未能保存：${r}`); }
     }
 
     // —— 核对阶段：重开读回，等于目标才算真存住 ——
@@ -218,18 +253,52 @@ export async function fillEdge(page, data, log, shouldStop) {
       await page.waitForTimeout(1500); // 给最后保存的那种留点落库时间
       for (const item of toVerify) {
         if (shouldStop && shouldStop()) { log('⏹ 已停止（Edge）'); return; }
-        let got = '';
-        try { got = await readBack(page, cfg, ui, codeToAria[item.locale], item.text); }
-        catch (e) { got = ''; await recoverToList(page, ui); }
-        if (got === item.text.trim()) log(`  ✅ ${item.locale} 核对通过`);
+        const v = await verifyStored(page, cfg, ui, codeToAria[item.locale], item.text);
+        if (v.ok) log(`  ✅ ${item.locale} 核对通过`);
         else if (pass < 3) { nextPending.push(item); log(`  ${item.locale} 读回与目标不符，下一轮重试`); }
-        else failed.push(`${item.locale}(读回不符)`);
+        else { failed.push({ locale: item.locale, reason: '读回不符', item }); log(`  ⚠️ ${item.locale} 读回不符：${describeMismatch(item.text, v.got)}`); }
       }
     }
     pending = nextPending;
   }
 
-  if (failed.length) log(`Edge 完成。⚠️ 这些没存上，需人工处理：${failed.join(', ')}`);
+  // —— 收尾：整页重载后再核对一次“读回不符”的语言 ——
+  // Edge 落库是异步且偏慢的（后台有明显延迟）：3 轮内的重开读回，读到的可能仍是页面内旧模型/尚未
+  // 落库的值，于是明明已存住却被判“读回不符”——上面日志里大量“下一轮重试”多半就是这种假失败。
+  // 整页重载会丢弃前端旧模型、向服务端重新拉取真实值，再耐心读回一次；仍不符才算真的没存上。
+  // 这一步只读不写、不重打文案，代价小，却能把绝大多数“落库延迟”造成的假失败救回来。
+  const readFails = failed.filter((f) => f.reason === '读回不符');
+  if (readFails.length && !(shouldStop && shouldStop())) {
+    log(`Edge 收尾：整页重载后再确认 ${readFails.length} 种（排除落库延迟造成的假失败）…`);
+    try {
+      await page.reload({ waitUntil: 'load' });
+      // 必须等【原界面语言的】编辑按钮真的回来，再用之前建好的 ui / codeToAria 去读回：
+      // 重载可能弹回重新登录、或渲染很慢、甚至换了界面语言——那样按钮永远等不到，此时若照旧读回，
+      // 每次 openModal 都点空、全部超时，会把明明已存住的语言错报成“重载后仍不符”，反而坑用户。
+      // 等不到就【维持上一轮判定、不改判】，只如实说明收尾没跑成。
+      const backOk = await page.getByRole('button', { name: ui.editRole }).first()
+        .waitFor({ timeout: 30000 }).then(() => true).catch(() => false);
+      if (!backOk) {
+        // 重载后回不到列表（多半要重新登录/界面语言变了）：这些语言可能已存住、只是这轮没读到，
+        // 改判为“未核对”而非“没存上”，提示登录后自查，避免用户盲目重填、反而覆盖好数据。
+        for (const f of readFails) f.reason = '未核对(重载后需重新登录)';
+        log(`Edge 收尾：重载后未回到语言列表（多半要重新登录，或界面语言变了），这 ${readFails.length} 种未能核对——它们可能已存住，请登录后自查，勿盲目重填。`);
+      } else {
+        await page.waitForTimeout(2000);
+        for (const f of readFails) {
+          if (shouldStop && shouldStop()) break;
+          const v = await verifyStored(page, cfg, ui, codeToAria[f.locale], f.item.text);
+          if (v.ok) { f.recovered = true; log(`  ✅ ${f.locale} 重载后核对通过（此前为落库延迟，实际已存住）`); }
+          else log(`  ⚠️ ${f.locale} 重载后仍不符：${describeMismatch(f.item.text, v.got)}`);
+        }
+      }
+    } catch (e) {
+      log(`Edge 收尾核对未能完成（${e.message.split('\n')[0]}），按上一轮结果汇报`);
+    }
+  }
+
+  const stillFailed = failed.filter((f) => !f.recovered);
+  if (stillFailed.length) log(`Edge 完成。⚠️ 以下语言未通过核对，请在浏览器里人工确认：${stillFailed.map((f) => `${f.locale}(${f.reason})`).join(', ')}`);
   else if (!attempted) log('⚠️ Edge：没有符合条件的描述可填（原因见上方跳过提示），后台未做任何修改。');
   else log('Edge 完成：全部已保存并核对通过。');
 }
