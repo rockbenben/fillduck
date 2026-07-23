@@ -1,10 +1,14 @@
 # FillDuck 填鸭
 
-[中文](README.md) · **English**
+> Publishing an extension in 20 languages? Stop pasting them in one at a time
 
-> 365 Open Source Plan #13 · One local multilingual file, bulk-filled into the store descriptions and search terms of the Chrome / Edge / Firefox extension dashboards.
+**English** · [简体中文](README.md)
 
-> One local multilingual JSON, auto-filled into the **descriptions** and **search terms** of the Chrome Web Store, Edge Add-ons, and Firefox Add-ons (AMO) dashboards. **Runs locally · bilingual · drafts only — you stay in control of publishing.**
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![365 Open Source Plan #013](https://img.shields.io/badge/365%20Open%20Source%20Plan-%23013-1f6feb)](https://github.com/rockbenben/365opensource)
+
+**▶ Run it**: double-click `start.bat` on Windows, or `./start.sh` on macOS / Linux — dependencies install on first run. Needs Node.js.
+
+> One local multilingual JSON, auto-filled into the **descriptions** and **search terms** of the Chrome Web Store, Edge Add-ons, and Firefox Add-ons (AMO) dashboards. **Runs locally · bilingual · submission stays in your hands** — Chrome and Edge get drafts only; AMO description edits save directly (see [What it does](#what-it-does)).
 
 You publish an extension in 15–20+ languages and dread re-pasting every description / search term by hand on each update. FillDuck drives **your own real browser** (your login, your machine — nothing is uploaded) to open each language, type the text in, and save a draft. You review everything and submit yourself.
 
@@ -14,17 +18,17 @@ One screen: paste your dashboard URLs + multilingual JSON → check what to fill
 
 ![FillDuck console](docs/images/console-en.png)
 
-| 中文界面 (Chinese UI) | Run controls + live log |
-| --- | --- |
+| 中文界面 (Chinese UI)                     | Run controls + live log                  |
+| ----------------------------------------- | ---------------------------------------- |
 | ![Chinese UI](docs/images/console-zh.png) | ![Live log](docs/images/console-run.png) |
 
 ## What it does
 
-| Dashboard | How it fills | Verification |
-| --- | --- | --- |
-| **Chrome Web Store** | switches the language dropdown per locale, fills the description | clicks **Save draft** once after all languages |
-| **Edge Add-ons** (Partner Center) | fills description + search terms per language, saves each draft | re-opens each to verify, retries failures (up to 3 rounds) |
-| **Firefox Add-ons** (AMO) | all languages live in one form — filled and saved in a single submit | reads back after saving, up to 3 rounds |
+| Dashboard                         | How it fills                                                         | Verification                                               |
+| --------------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------- |
+| **Chrome Web Store**              | switches the language dropdown per locale, fills the description     | clicks **Save draft** once after all languages             |
+| **Edge Add-ons** (Partner Center) | fills description + search terms per language, saves each draft      | re-opens each to verify, retries failures (up to 3 rounds) |
+| **Firefox Add-ons** (AMO)         | all languages live in one form — filled and saved in a single submit | reads back after saving, up to 3 rounds                    |
 
 - **Descriptions**: all three dashboards (AMO caps each language at 15,000 characters).
 - **Search terms**: Edge only (Chrome / AMO have no such field); one set per language, rules below.
@@ -114,6 +118,4 @@ Full guide & troubleshooting: **[SETUP-playwright.md](SETUP-playwright.md)**.
 
 ## About the 365 Open Source Plan
 
-This is project #13 of the [365 Open Source Plan](https://github.com/rockbenben/365opensource).
-
-One person + AI, 300+ open-source projects in a year. [Submit your idea →](https://my.feishu.cn/share/base/form/shrcnI6y7rrmlSjbzkYXh6sjmzb)
+Project **#013** of the [365 Open Source Plan](https://github.com/rockbenben/365opensource) — one person + AI, 300+ open-source projects in a year. [Submit your idea →](https://365.aishort.top/) · [Discord](https://discord.gg/PZTQfJ4GjX) · [Telegram](https://t.me/aishort_top)

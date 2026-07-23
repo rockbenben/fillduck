@@ -1,10 +1,14 @@
 # FillDuck 填鸭
 
-**中文** · [English](README.en.md)
+> 扩展上架 20 种语言，别再在后台一种一种手动粘贴
 
-> 365 开源计划 #13 · 本地多语言文案，批量填进 Chrome / Edge / Firefox 扩展商店后台的描述与搜索词
+[English](README.en.md) · **简体中文**
 
-> 一份本地多语言 JSON，自动填进 Chrome / Edge / Firefox 扩展商店后台的**描述**与**搜索词**。**本地运行 · 双语 · 只写草稿，发布权始终在你手里。**
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![365 开源计划 #013](https://img.shields.io/badge/365%20%E5%BC%80%E6%BA%90%E8%AE%A1%E5%88%92-%23013-1f6feb)](https://github.com/rockbenben/365opensource)
+
+**▶ 跑起来**：Windows 双击 `start.bat`，macOS / Linux 运行 `./start.sh` —— 首次自动装依赖。需要 Node.js。
+
+> 一份本地多语言 JSON，自动填进 Chrome / Edge / Firefox 扩展商店后台的**描述**与**搜索词**。**本地运行 · 双语 · 提交权始终在你手里**（Chrome / Edge 只写草稿；AMO 的描述保存即生效，详见[能做什么](#能做什么)）。
 
 扩展上架 15~20+ 种语言，每次更新描述/搜索词都要在后台一种一种手动粘贴。FillDuck 驱动**你本机的真实浏览器**（用你自己的登录态，全程本地，不上传任何东西）逐语言打开、填字、存草稿；最后由你人工检查、自己提交。
 
@@ -14,17 +18,17 @@
 
 ![FillDuck 控制台](docs/images/console-zh.png)
 
-| 双语界面（English） | 运行控制 + 实时日志 |
-| --- | --- |
+| 双语界面（English）                       | 运行控制 + 实时日志                      |
+| ----------------------------------------- | ---------------------------------------- |
 | ![English UI](docs/images/console-en.png) | ![运行日志](docs/images/console-run.png) |
 
 ## 能做什么
 
-| 后台 | 怎么填 | 校验 |
-| --- | --- | --- |
-| **Chrome 应用商店** | 逐语言切下拉填描述 | 全部填完点一次「保存草稿」落库 |
+| 后台                               | 怎么填                          | 校验                                                |
+| ---------------------------------- | ------------------------------- | --------------------------------------------------- |
+| **Chrome 应用商店**                | 逐语言切下拉填描述              | 全部填完点一次「保存草稿」落库                      |
 | **Edge Add-ons**（Partner Center） | 逐语言填描述 + 搜索词，各存草稿 | 重开每种语言读回核对，没存住的自动重试（最多 3 轮） |
-| **Firefox Add-ons**（AMO） | 所有语言在同一表单，一次保存 | 保存后读回核对，最多 3 轮 |
+| **Firefox Add-ons**（AMO）         | 所有语言在同一表单，一次保存    | 保存后读回核对，最多 3 轮                           |
 
 - **描述**：三个后台都支持（AMO 每语言上限 15000 字符）。
 - **搜索词**：仅 Edge 支持（Chrome / AMO 无此字段）；每语言一组，规则见下。
@@ -114,6 +118,4 @@ npm run all      # 全部
 
 ## 关于 365 开源计划
 
-本项目是 [365 开源计划](https://github.com/rockbenben/365opensource) 的第 13 个项目。
-
-一个人 + AI，一年 300+ 个开源项目。[提交你的需求 →](https://my.feishu.cn/share/base/form/shrcnI6y7rrmlSjbzkYXh6sjmzb)
+[365 开源计划](https://github.com/rockbenben/365opensource) 的第 **#013** 个项目——一个人 + AI，一年 300+ 个开源项目。[提交你的需求 →](https://365.aishort.top/) · [Discord](https://discord.gg/PZTQfJ4GjX) · [Telegram](https://t.me/aishort_top)
