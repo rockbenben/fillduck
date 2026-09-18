@@ -48,7 +48,7 @@ let logSeq = 0;              // 日志单调序号：客户端用 Last-Event-ID 
 function sseFrame(obj, id) { return (id ? `id: ${id}\n` : '') + `data: ${JSON.stringify(obj)}\n\n`; }
 function broadcast(obj, id) {
   const line = sseFrame(obj, id);
-  for (const res of clients) { try { res.write(line); } catch (e) { /* 忽略断开 */ } }
+  for (const res of clients) { try { res.write(line); } catch { /* 忽略断开 */ } }
 }
 function log(msg) {
   const seq = ++logSeq;
@@ -386,7 +386,7 @@ const server = http.createServer(async (req, res) => {
           const buf = await readFile(filePath);
           res.writeHead(200, { 'Content-Type': MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream' });
           res.end(buf); return;
-        } catch (e) { /* 落到 404 */ }
+        } catch { /* 落到 404 */ }
       }
     }
     res.writeHead(404); res.end('not found');
@@ -411,5 +411,5 @@ server.listen(PORT, '127.0.0.1', () => { // 仅本机可访问，不暴露到局
   // 自动打开默认浏览器
   const cmd = process.platform === 'win32' ? ['cmd', ['/c', 'start', '', u]]
     : process.platform === 'darwin' ? ['open', [u]] : ['xdg-open', [u]];
-  try { spawn(cmd[0], cmd[1], { stdio: 'ignore', detached: true }).unref(); } catch (e) { /* 手动打开即可 */ }
+  try { spawn(cmd[0], cmd[1], { stdio: 'ignore', detached: true }).unref(); } catch { /* 手动打开即可 */ }
 });

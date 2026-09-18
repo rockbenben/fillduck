@@ -139,9 +139,9 @@ export async function fillEdgeSearchTerms(page, data, log, shouldStop) {
       await page.waitForTimeout(1500);
       for (const item of toVerify) {
         if (shouldStop && shouldStop()) { log('⏹ 已停止（Edge 搜索词）'); return; }
-        let got = [];
+        let got;
         try { got = await readBackTerms(page, st, ui, codeToAria[item.locale], item.text); }
-        catch (e) { got = []; await recoverToList(page, ui); }
+        catch { got = []; await recoverToList(page, ui); }
         const want = item.text.map((s) => s.trim());
         const ok = sameTermSet(got, want);
         if (ok) log(`  ✅ ${item.locale} 搜索词核对通过`);

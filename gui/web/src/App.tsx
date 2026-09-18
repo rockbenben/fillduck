@@ -193,7 +193,7 @@ export default function App() {
   const fileRef = useRef<HTMLInputElement>(null);
   const termsFileRef = useRef<HTMLInputElement>(null);
   const loadedRef = useRef(false);
-  const tRef = useRef<Dict>(t); tRef.current = t;
+  const tRef = useRef<Dict>(t);
   const runningRef = useRef(false);
   const runErrRef = useRef(false);
   const logIdRef = useRef(0);
@@ -202,6 +202,11 @@ export default function App() {
   const maxSeqRef = useRef(0);
   const initializedRef = useRef(false);    // 是否已处理过首个（重放）状态帧
   const restartPendingRef = useRef(false); // 重连间隔里服务端进程是否换过（重启）
+
+  // 让 SSE 回调与副作用始终读到最新的界面字典。必须写在 effect 里，不能在渲染期间直接赋值：
+  // 渲染期间改 ref 在并发渲染下可能被丢弃、或读到另一条渲染分支的值。
+  // 只被异步回调读取，晚一帧同步没有影响。
+  useEffect(() => { tRef.current = t; });
 
   const onLangChange = (v: Lang) => {
     setLang(v);
@@ -242,6 +247,9 @@ export default function App() {
   };
 
   useEffect(() => {
+    // loadState 是 async：它的 setState 全部在 await 之后（微任务里）执行，不是渲染后的同步 setState，
+    // 不会触发这条规则要防的级联渲染。规则看不穿 async 边界，故在此定向关闭。
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadState();
 
     const es = new EventSource('/events');

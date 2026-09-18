@@ -106,7 +106,7 @@ export function forceDashboardLang(url, lang) {
       const parsed = new URL(u);
       parsed.searchParams.set('hl', chromeHl);
       u = parsed.toString();
-    } catch (e) { /* 不是合法 URL，原样返回让导航自己报错 */ }
+    } catch { /* 不是合法 URL，原样返回让导航自己报错 */ }
   }
   return u;
 }

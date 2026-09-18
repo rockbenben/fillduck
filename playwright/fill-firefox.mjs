@@ -77,7 +77,10 @@ export async function fillFirefox(page, data, log, shouldStop) {
     throw new Error('没等到 AMO 的「描述附加组件」区块。请检查：① 链接是 …/developers/addon/<名>/edit；② 已登录 Mozilla 账号；③ 网络正常。');
   }
 
-  let form = await openDescribeForm(page, cfg);
+  // 先进入编辑态：下面的 l10n 语言列表要在这个表单里才读得到。
+  // 刻意不接返回值——循环里每一轮都会重新 openDescribeForm 并赋值，这里接了也会被立刻覆盖。
+  await openDescribeForm(page, cfg);
+  let form; // 由循环内赋值，只用于提交那一步
 
   // AMO 支持的语言集 = l10n 弹窗里全部链接（默认/现有/新语言并集）
   const supported = await page.locator(cfg.allLocaleLinks).evaluateAll(
@@ -163,7 +166,7 @@ export async function fillFirefox(page, data, log, shouldStop) {
 
     // —— 读回核对：重开表单逐语言比对（换行按 \r\n→\n 归一）——
     await page.waitForTimeout(1000);
-    form = await openDescribeForm(page, cfg);
+    await openDescribeForm(page, cfg); // 重开表单供下面的读回；返回值不再使用（form 只用于提交）
     const next = [];
     for (const q of filled) {
       const loc = page.locator(cfg.descriptionByLocale(q.locale)).first();
