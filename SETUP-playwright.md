@@ -93,8 +93,19 @@ npm run login
 
 ```bash
 npm --prefix gui/web install   # 一次性
-npm --prefix gui/web run build
+npm run build:web
 ```
+
+改完 `gui/web/src` **必须**重新构建并把 `gui/web/dist` 一起提交：CI 会重建一次逐字节比对，忘了重建会被拦下（否则旧界面会静默发给所有人）。
+
+## 开发者：提交前自检
+
+```bash
+npm test        # 单元测试（纯逻辑，不需要真浏览器）
+npm run lint    # ESLint（只查会出错的地方，不管排版）
+```
+
+CI（`.github/workflows/ci.yml`）在推送与 PR 上跑三件事：Node 20 / 22 / 24 三档的单测、ESLint、以及 `gui/web/dist` 与源码是否同步。
 
 ## 开发者：加平台 / 加语言
 

@@ -4,9 +4,15 @@
   "version": "1.0.0",
   "type": "module",
   "private": true,
+  "engines": {
+    "node": "^20.19.0 || ^22.13.0 || >=24"
+  },
   "scripts": {
     "start": "node gui/server.mjs",
     "test": "node --test",
+    "lint": "eslint .",
+    "typecheck": "npm --prefix gui/web run typecheck",
+    "build:web": "npm --prefix gui/web run build",
     "login": "node playwright/run.mjs --login",
     "chrome": "node playwright/run.mjs --store chrome",
     "edge": "node playwright/run.mjs --store edge",
@@ -14,6 +20,13 @@
     "all": "node playwright/run.mjs --store all"
   },
   "devDependencies": {
-    "playwright": "^1.61.1"
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.10.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.7",
+    "globals": "^17.12.0",
+    "playwright": "^1.61.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.70.0"
   }
 }

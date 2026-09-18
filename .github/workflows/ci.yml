@@ -1,0 +1,89 @@
+# 提交门禁。本仓此前没有任何工作流：47 个单测只能靠人记得手跑，而 gui/web/dist
+# 是提交进仓库的产物，改了前端源码却忘了重建时，旧界面会静默发给所有人、零信号。
+# 故挂到 push(main) 与 pull_request 上。删它之前请先确认这些风险另有兜底。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支连续推送时只跑最新一次，省掉排队中的旧运行
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: 单元测试 (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # 覆盖 package.json 声明的下限（20.19）、.nvmrc（22）与当前 LTS（24）
+      matrix:
+        node: ['20', '22', '24']
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      # 单测只跑纯逻辑，不需要真浏览器；跳过下载能省掉上百 MB 和几十秒
+      - name: 安装依赖
+        run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      - name: 跑单测
+        run: npm test
+
+  lint:
+    name: 静态检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+      - name: 安装依赖
+        run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      - name: 安装前端依赖
+        run: npm --prefix gui/web ci
+      - name: ESLint
+        run: npm run lint
+      # vite build 只剥类型、不做类型检查，所以类型错误必须单独查一次，
+      # 否则前端写错类型也能一路绿到线上。
+      - name: 类型检查
+        run: npm run typecheck
+
+  dist:
+    name: 构建产物与源码同步
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: gui/web/package-lock.json
+      - name: 安装前端依赖
+        run: npm --prefix gui/web ci
+      - name: 重新构建前端
+        run: npm run build:web
+      # gui/web/dist 是提交进仓库的产物（普通用户开箱即用，无需构建）。
+      # 于是「改了 gui/web/src 却忘了重建」会静默地把旧界面发给所有人——
+      # 这一步用「重建后必须与提交版逐字节一致」把这种漂移挡在合并前。
+      # 产物与源码行尾无关（打包器会归一行尾），故在 Linux 上校验也成立。
+      - name: 校验 dist 与源码一致
+        run: git diff --exit-code -- gui/web/dist
+      - name: 说明如何修复
+        if: failure()
+        run: |
+          echo "::error::gui/web/dist 与当前源码不同步。改了 gui/web/src 就必须重新构建并一起提交 dist。"
+          echo "本地修复：npm run build:web，然后把 gui/web/dist 的改动一并提交。"
