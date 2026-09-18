@@ -1,3 +1,14 @@
+# 默认按文本处理，仓库内统一存 LF。
 * text=auto
+
+# 启动脚本的行尾必须固定：Windows 的 .bat 需要 CRLF，Unix 的 .sh 需要 LF
+#（否则会报 "bad interpreter"）。
 *.sh text eol=lf
 *.bat text eol=crlf
+
+# 构建产物不做行尾转换。gui/web/dist 是压缩后的 bundle，一旦被当文本转换，
+# Windows 检出会平白多出上百个 CR；更麻烦的是每次 npm run build 之后
+# git status 都显示 dist 被改，而 git diff 却是空的（git 归一化后无差异）——
+# 于是无法分辨"真改了源码没重建"还是"只是行尾噪声"。
+# 标记 -text 让 git 原样存取，构建产物与仓库字节一致。
+gui/web/dist/** -text
