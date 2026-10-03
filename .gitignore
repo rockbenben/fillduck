@@ -14,6 +14,7 @@ projects/
 
 # 开发工具与一次性脚本的本地产物
 .claude/
+.qoder*
 .workbuddy-ai/
 .gstack/
 docs/superpowers/
@@ -22,3 +23,6 @@ e2e-probe.mjs
 # 编辑器 / 操作系统噪声
 .DS_Store
 Thumbs.db
+
+# 打磨稿与取证通路（工作稿，不入库；复跑见 design-preview/probe.mjs）
+design-preview/

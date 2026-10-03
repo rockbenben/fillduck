@@ -10,8 +10,10 @@ import reactRefresh from 'eslint-plugin-react-refresh';
 
 export default tseslint.config(
   {
-    // 依赖、构建产物、用户数据（含后台链接与文案）都不检查
-    ignores: ['**/node_modules/**', 'gui/web/dist/**', 'projects/**', '.auth-profile/**', 'docs/**'],
+    // 依赖、构建产物、用户数据（含后台链接与文案）都不检查；
+    // design-preview/ 是打磨稿与取证脚本、.workbuddy-ai/ 是别处带来的草稿脚本，两者都已 gitignore
+    // （CI 看不到），本地也别挡门禁——门禁红一次就必须能说出它挡下了什么，否则没人再信它的红。
+    ignores: ['**/node_modules/**', 'gui/web/dist/**', 'projects/**', '.auth-profile/**', 'docs/**', 'design-preview/**', '.workbuddy-ai/**'],
   },
 
   {
