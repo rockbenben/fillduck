@@ -45,7 +45,7 @@ The UI and dashboards are **bilingual (中 / English)**: the console auto-detect
    - Click **Log in** → sign into Google / Microsoft / Mozilla in the browser window (once; remembered after).
    - **Check what to fill** (Chrome desc / Edge desc / Edge terms / Firefox desc — multi-select; items missing a URL or content are greyed out) → click **Start** → watch the live log → review in the browser → submit yourself.
 
-> Use the **中 / EN** toggle (top-right) to switch the interface language (remembered). The live run-log is backend-generated and currently Chinese only.
+> Use the **中 / EN** toggle (top-right) to switch the interface language (remembered). The live run-log is backend-generated and shown in the interface language — English UI gets English logs too.
 
 ## Multiple projects
 

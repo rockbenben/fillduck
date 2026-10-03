@@ -60,7 +60,7 @@ export async function recoverToList(page, ui) {
 }
 
 // 重开弹层读回当前描述，读完回列表。落库是异步的：存完立刻读回常常还是【旧值】——
-// 更新场景下旧值同样非空，按“非空”停轮询会立刻拿到旧文案、误判“读回不符”。
+// 更新场景下旧值同样非空，按“非空”停轮询会立刻拿到旧文案、误判成“没存住”。
 // 所以轮询到值等于期望（expected）才停；超时返回最后读到的值，由调用方比对定夺。
 async function readBack(page, cfg, ui, editAria, expected) {
   const ta = await openModal(page, cfg, editAria);
@@ -86,29 +86,30 @@ async function verifyStored(page, cfg, ui, editAria, text) {
   return { ok: got === text.trim(), got };
 }
 
-// 读回不符时的精确诊断：把“读回不符”变成能定位病因的信息（Edge 后台无法直接观测，只能靠这个）。
-// 报告目标/读回字数、首个不同字符的位置与两侧片段，并判别常见形态：读到空 / 前缀截断 / 空白规范化 / 旧值残留。
+// 核对不符时的精确诊断：把「存回来的内容和要填的不一样」变成能定位病因的信息（Edge 后台无法直接观测，只能靠这个）。
+// 报告要填/实际字数、首个不同字符的位置与两侧片段，并判别常见形态：读到空 / 只存进前半段 / 空白被整理 / 旧值残留。
+// 这段文字直接上屏给用户看，所以用“要填的 / 实际读到的”，不用“目标 / 读回 / 前缀”。
 function describeMismatch(want, got) {
   const w = (want || '').trim();
   const g = (got == null ? '' : String(got)).trim();
-  if (got == null) return '读回失败（打不开弹层或读不到值）';
-  if (!g) return '读回=空（后台里这条是空的：多半没存进去，或读到了错误的字段）';
-  if (g === w) return '实际一致（比对口径问题）';
+  if (got == null) return '没读到内容（弹窗打不开或读不到值）';
+  if (!g) return '后台里这一条是空的：多半没存进去，或读到了错的语言';
+  if (g === w) return '内容其实一致（是判定规则的问题）';
   let i = 0;
   while (i < w.length && i < g.length && w[i] === g[i]) i++;
   const around = (s) => JSON.stringify(s.slice(Math.max(0, i - 8), i + 12));
   let shape = '';
-  if (g === w.slice(0, g.length)) shape = ' → 读回是目标的前缀，疑似被后台截断';
-  else if (w === g.slice(0, w.length)) shape = ' → 读回比目标更长，末尾多了内容';
-  else if (w.replace(/\s+/g, '') === g.replace(/\s+/g, '')) shape = ' → 去掉空白/换行后一致，疑似被后台规范化';
-  return `目标 ${w.length} 字 / 读回 ${g.length} 字，首个不同在第 ${i} 字：目标[…]=${around(w)} 读回[…]=${around(g)}${shape}`;
+  if (g === w.slice(0, g.length)) shape = ' → 只存进去前半段，疑似被后台截断了';
+  else if (w === g.slice(0, w.length)) shape = ' → 比要填的长，末尾多了内容';
+  else if (w.replace(/\s+/g, '') === g.replace(/\s+/g, '')) shape = ' → 去掉空白/换行后一致，疑似被后台整理过';
+  return `要填 ${w.length} 字 / 实际 ${g.length} 字，第一处不同在第 ${i} 字：要填[…]=${around(w)} 实际[…]=${around(g)}${shape}`;
 }
 
 // 填描述并反复确认值留住且保存键可点。
 // 第 1 次走快速路径 keyboard.insertText：单次 CDP 调用产生【可信】input 事件（等价 IME/粘贴提交，
 // 不是 fill() 那种合成事件，Edge 认），耗时与文本长度无关；末字符仍用真实击键补一次 keydown/keyup。
 // 若没生效，后续尝试回退【真实键盘逐字输入】（等价手动打字，慢但最稳）。
-// 返回 { ok, reason }：reason 区分“值没留住”与“保存键未启用”，日志可定位是输入问题还是表单校验问题。
+// 返回 { ok, reason }：reason 是给用户的失败原因（内容没留住 / 保存按钮没变可点），日志据此区分输入问题还是表单校验问题。
 async function fillUntilSavable(page, ta, save, text) {
   let reason = '';
   for (let a = 0; a < 3; a++) {
@@ -132,12 +133,12 @@ async function fillUntilSavable(page, ta, save, text) {
       if (stuck && enabled) return { ok: true };
       if (!stuck) break; // 值都没留住，再等保存键也没意义，直接重打
     }
-    reason = stuck ? '保存键未启用' : '值未留住';
+    reason = stuck ? '保存按钮一直没变可点' : '填进去的内容没留住';
   }
   return { ok: false, reason };
 }
 
-// 填 + 存，不在这里核对。返回 'submitted' | 'unchanged' | 'no-save-button'
+// 填 + 存，不在这里核对。返回 'submitted' | 'unchanged' | 失败原因（给用户看的中文）
 async function fillAndSaveOne(page, cfg, ui, editAria, text) {
   const ta = await openModal(page, cfg, editAria);
   const cur = ((await ta.inputValue().catch(() => '')) || '').trim();
@@ -145,7 +146,7 @@ async function fillAndSaveOne(page, cfg, ui, editAria, text) {
 
   const save = page.getByRole('button', { name: ui.save, exact: true });
   const savable = await fillUntilSavable(page, ta, save, text);
-  if (!savable.ok) { await backToList(page, cfg, ui); return savable.reason || 'no-save-button'; }
+  if (!savable.ok) { await backToList(page, cfg, ui); return savable.reason; }
 
   // 点保存前，强制把 textarea 当前（正确的）值同步进 Angular 表单模型，再点保存。
   // 病因（读回诊断实锤）：insertText 后立刻点保存会提交【旧值】——界面已是新文案、存进后台的却是上一版，
@@ -255,21 +256,21 @@ export async function fillEdge(page, data, log, shouldStop) {
         if (shouldStop && shouldStop()) { log('⏹ 已停止（Edge）'); return; }
         const v = await verifyStored(page, cfg, ui, codeToAria[item.locale], item.text);
         if (v.ok) log(`  ✅ ${item.locale} 核对通过`);
-        else if (pass < 3) { nextPending.push(item); log(`  ${item.locale} 读回与目标不符，下一轮重试`); }
-        else { failed.push({ locale: item.locale, reason: '读回不符', item }); log(`  ⚠️ ${item.locale} 读回不符：${describeMismatch(item.text, v.got)}`); }
+        else if (pass < 3) { nextPending.push(item); log(`  ${item.locale} 存回来的内容和要填的不一样，下一轮重试`); }
+        else { failed.push({ locale: item.locale, reason: '存回来的内容和要填的不一样', readBack: true, item }); log(`  ⚠️ ${item.locale} 存回来的内容和要填的不一样：${describeMismatch(item.text, v.got)}`); }
       }
     }
     pending = nextPending;
   }
 
-  // —— 收尾：整页重载后再核对一次“读回不符”的语言 ——
+  // —— 收尾：整页重载后再核对一次“存回来的和要填的不一样”（readBack）的语言 ——
   // Edge 落库是异步且偏慢的（后台有明显延迟）：3 轮内的重开读回，读到的可能仍是页面内旧模型/尚未
-  // 落库的值，于是明明已存住却被判“读回不符”——上面日志里大量“下一轮重试”多半就是这种假失败。
+  // 落库的值，于是明明已存住却被判成没存上——上面日志里大量“下一轮重试”多半就是这种假失败。
   // 整页重载会丢弃前端旧模型、向服务端重新拉取真实值，再耐心读回一次；仍不符才算真的没存上。
   // 这一步只读不写、不重打文案，代价小，却能把绝大多数“落库延迟”造成的假失败救回来。
-  const readFails = failed.filter((f) => f.reason === '读回不符');
+  const readFails = failed.filter((f) => f.readBack);
   if (readFails.length && !(shouldStop && shouldStop())) {
-    log(`Edge 收尾：整页重载后再确认 ${readFails.length} 种（排除落库延迟造成的假失败）…`);
+    log(`Edge 收尾：整页重载后再确认 ${readFails.length} 种（排除后台保存慢一步造成的假失败）…`);
     try {
       await page.reload({ waitUntil: 'load' });
       // 必须等【原界面语言的】编辑按钮真的回来，再用之前建好的 ui / codeToAria 去读回：
@@ -288,8 +289,8 @@ export async function fillEdge(page, data, log, shouldStop) {
         for (const f of readFails) {
           if (shouldStop && shouldStop()) break;
           const v = await verifyStored(page, cfg, ui, codeToAria[f.locale], f.item.text);
-          if (v.ok) { f.recovered = true; log(`  ✅ ${f.locale} 重载后核对通过（此前为落库延迟，实际已存住）`); }
-          else log(`  ⚠️ ${f.locale} 重载后仍不符：${describeMismatch(f.item.text, v.got)}`);
+          if (v.ok) { f.recovered = true; log(`  ✅ ${f.locale} 重载后核对通过（此前只是后台保存慢了一步，其实已经存上了）`); }
+          else log(`  ⚠️ ${f.locale} 重载后还是和要填的不一样：${describeMismatch(f.item.text, v.got)}`);
         }
       }
     } catch (e) {

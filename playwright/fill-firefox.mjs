@@ -118,7 +118,7 @@ export async function fillFirefox(page, data, log, shouldStop) {
       if (shouldStop && shouldStop()) { stopRequested = true; break; }
       if (!(await createLocaleField(page, cfg, q.locale))) {
         createFailed.push(q);
-        log(`  ⚠️ ${q.locale} 字段创建未成，稍后重试`);
+        log(`  ⚠️ ${q.locale} 这一栏没建出来，稍后重试`);
         continue;
       }
       usable.push(q);
@@ -136,7 +136,7 @@ export async function fillFirefox(page, data, log, shouldStop) {
     if (!filled.length) {
       if (stopRequested) { log('⏹ 已停止（Firefox），未填入任何内容。'); return; }
       if (pass < 3) { pending = createFailed; continue; }
-      failed.push(...createFailed.map((q) => `${q.locale}(无法创建字段)`));
+      failed.push(...createFailed.map((q) => `${q.locale}(这一栏没建出来)`));
       break;
     }
     if (stopRequested) log(`⏹ 收到停止（Firefox）：先把已填的 ${filled.length} 种保存再停…`);
@@ -153,14 +153,14 @@ export async function fillFirefox(page, data, log, shouldStop) {
     }
     if (stopRequested) {
       log(saved
-        ? `⏹ 已停止（Firefox）：已填的 ${filled.length} 种已保存（未读回核对，请人工检查）。`
+        ? `⏹ 已停止（Firefox）：已填的 ${filled.length} 种已保存（没有再读一遍核对，请人工检查）。`
         : '⚠️ 已停止（Firefox），但保存未确认——请在浏览器里人工检查并手动保存。');
       return;
     }
     if (!saved) {
       // 提交没成：已填的与本轮创建失败的都进下一轮；最后一轮才记失败。
       if (pass < 3) { pending = [...filled, ...createFailed]; log('  保存未确认，下一轮重试'); continue; }
-      failed.push(...filled.map((q) => `${q.locale}(提交未完成)`), ...createFailed.map((q) => `${q.locale}(无法创建字段)`));
+      failed.push(...filled.map((q) => `${q.locale}(没保存成功)`), ...createFailed.map((q) => `${q.locale}(这一栏没建出来)`));
       break;
     }
 
@@ -172,12 +172,12 @@ export async function fillFirefox(page, data, log, shouldStop) {
       const loc = page.locator(cfg.descriptionByLocale(q.locale)).first();
       const got = (await loc.count()) ? await loc.inputValue().catch(() => '') : '';
       if (normNl(got) === normNl(q.text)) log(`  ✅ ${q.locale} 核对通过`);
-      else if (pass < 3) { next.push(q); log(`  ${q.locale} 读回与目标不符，下一轮重试`); }
-      else failed.push(`${q.locale}(读回不符)`);
+      else if (pass < 3) { next.push(q); log(`  ${q.locale} 存回来的内容和要填的不一样，下一轮重试`); }
+      else failed.push(`${q.locale}(存回来的内容不对)`);
     }
     // 创建失败的与读回不符的一起带进下一轮重试；末轮记失败。
     if (pass < 3) next.push(...createFailed);
-    else failed.push(...createFailed.map((q) => `${q.locale}(无法创建字段)`));
+    else failed.push(...createFailed.map((q) => `${q.locale}(这一栏没建出来)`));
     pending = next;
   }
 

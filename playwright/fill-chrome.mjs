@@ -79,7 +79,7 @@ export async function fillChrome(page, data, log, shouldStop) {
         await page.waitForTimeout(400);
         ok = (((await ta.inputValue().catch(() => '')) || '').trim() === text.trim());
       }
-      if (!ok) { unstable.push(locale); log(`⚠️ Chrome ${locale}：填入未稳定生效，请检查该语言`); }
+      if (!ok) { unstable.push(locale); log(`⚠️ Chrome ${locale}：填进去了但没稳住，请去浏览器核对这一条`); }
       filled++;
       await page.waitForTimeout(300);
     }
@@ -121,12 +121,12 @@ export async function fillChrome(page, data, log, shouldStop) {
           ? `⏹ Chrome 已停止：已填的 ${filled} 种已点击“保存草稿”。`
           : `Chrome 完成：已填 ${filled} 种并点击“保存草稿”。请人工检查后在后台提请审核。`);
     } else {
-      log(`⚠️ Chrome 已填 ${filled} 种但“保存草稿”没点上——请去浏览器里手动点击保存，否则这些内容不会落库！`);
+      log(`⚠️ Chrome 已填 ${filled} 种但“保存草稿”没点上——请去浏览器里手动点击保存，否则关掉浏览器就没了！`);
       // 保存没点上 = 本目标实质失败，必须上抛让上层报 ❌ 需重跑——
       // 默默正常返回会让整体打出「✅ 完成」+ 绿色成功提示，掩盖整轮未落库。
       if (!loopError) throw new Error('“保存草稿”未能点击，已填内容尚未保存，请人工保存或重跑');
     }
-    if (unstable.length) log(`⚠️ Chrome 这些语言填入未稳定生效，请逐个检查：${unstable.join(', ')}`);
+    if (unstable.length) log(`⚠️ Chrome 这些语言填进去了但没稳住，请逐个检查：${unstable.join(', ')}`);
   } else {
     log(`⚠️ Chrome 已填 ${filled} 种，但没找到“保存草稿”按钮，请手动点击保存，否则草稿不会保存。`);
     if (!loopError) throw new Error('没找到“保存草稿”按钮，已填内容尚未保存，请人工保存');

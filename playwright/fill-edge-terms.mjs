@@ -64,19 +64,19 @@ async function addTerms(page, st, terms) {
   }
 }
 
-// 填一个语言并保存（不在这里核对）。返回 'submitted' | 'unchanged' | 'error:...'
+// 填一个语言并保存（不在这里核对）。返回 'submitted' | 'unchanged' | 失败原因（给用户看的中文）
 async function fillTermsOne(page, st, ui, editAria, terms) {
   await openTermsModal(page, st, editAria);
   const current = (await readChips(page, st)).map((s) => s.trim());
   const target = terms.map((s) => s.trim());
   if (sameTermSet(current, target)) { await backToList(page, ui); return 'unchanged'; }
 
-  if (!(await clearChips(page, st))) { await backToList(page, ui); return 'error: 清空未尽'; }
+  if (!(await clearChips(page, st))) { await backToList(page, ui); return '旧词没清干净'; }
   await addTerms(page, st, target);
 
   const save = page.getByRole('button', { name: ui.save, exact: true });
   await page.waitForTimeout(500);
-  if (await save.isDisabled().catch(() => true)) { await backToList(page, ui); return 'error: 保存键不可点'; }
+  if (await save.isDisabled().catch(() => true)) { await backToList(page, ui); return '保存按钮点不了'; }
   await save.click();
   // 等提交信号（弹层消失 / 保存键变灰），再给落库留点时间
   for (let i = 0; i < 30; i++) {
@@ -145,8 +145,8 @@ export async function fillEdgeSearchTerms(page, data, log, shouldStop) {
         const want = item.text.map((s) => s.trim());
         const ok = sameTermSet(got, want);
         if (ok) log(`  ✅ ${item.locale} 搜索词核对通过`);
-        else if (pass < 3) { nextPending.push(item); log(`  ${item.locale} 读回不符（实得 ${got.length} 个），下一轮重试`); }
-        else failed.push(`${item.locale}(读回不符)`);
+        else if (pass < 3) { nextPending.push(item); log(`  ${item.locale} 存回来的词和要填的不一样（实际读到 ${got.length} 个），下一轮重试`); }
+        else failed.push(`${item.locale}(存回来的词不对)`);
       }
     }
     pending = nextPending;
