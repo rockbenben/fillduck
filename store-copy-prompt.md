@@ -21,15 +21,17 @@
 格式：JSON 对象，键为语言码（如 en、zh_CN、pt-BR，下划线/连字符均可），值为该语言完整描述字符串。
 
 硬性要求：
-- 每种语言 ≥250 字符（Edge 后台的最低要求，不足会被跳过）；建议 300–900 字符
+- 每种语言 ≥250 字符（Edge 后台的最低要求，不足会被跳过）；**上限 900 字符**——超了说明在堆功能清单，砍到讲完故事为止
+- 写给普通用户：一个不懂技术的用户在 5 秒内能扫完一条 bullet。禁止内部术语（如「过滤芯片」「字节级进度」「storage.local」「cookie」「弹窗/面板」这类开发者词），每条都写「用户得到什么」而不是「功能叫什么」
 - 纯文本：换行写 \n，项目符号用 •，不要 Markdown/HTML（商店不渲染）
 - 内容必须与扩展实际功能一致——夸大或与功能不符违反两家商店的政策，可致下架
 - 不要关键词堆砌（Chrome 有明确的 Keyword Spam 政策）
 
 推荐结构（每种语言保持一致）：
 1. 一句话定位：是什么 + 给谁 + 核心价值（含最有力的真实数字）
-2. 「主要特性：」+ 3~5 条 • 开头的功能点（含使用方式、快捷键、语言/主题支持）
-3. 收尾一句：内容来源 / 更新承诺 / 差异化卖点
+2. 3~6 条 • 开头的功能点，**每条一行、不超过 ~120 字符**（写使用动作与得到的结果，不写参数细节）
+3. 收尾一句：隐私承诺 / 开源 / 差异化，三选一，别贪多
+- 权限枚举不用写——商店页面本身逐项展示权限并单独索要理由；设置项细节（默认值、文件夹名等）留给界面与 README
 
 本地化要求：不是逐句翻译，而是按当地用户的表达习惯重写；专有名词（产品名、ChatGPT 等平台名）保留原文；阿拉伯语等 RTL 语言注意行文方向自然。
 
@@ -51,7 +53,8 @@
 ## 第四步：自检后再输出
 逐项检查，不通过就修正：
 - [ ] 两个文件都是合法 JSON（UTF-8）
-- [ ] 描述每种语言 ≥250 字符
+- [ ] 描述每种语言 ≥250 字符且 ≤900 字符
+- [ ] bullet ≤6 条、每条一行；通读一遍确认没有只有开发者才懂的词
 - [ ] 搜索词每语言 ≤7 条、每条 ≤30 字符、去重单词 ≤21
 - [ ] 语言键与扩展支持的语言一一对应
 - [ ] 所有数字与功能描述能在项目里找到出处
@@ -77,15 +80,17 @@ Read the project's README, manifest.json, options/UI strings and screenshots, th
 Format: a JSON object — keys are language codes (en, zh_CN, pt-BR; underscore or hyphen both fine), values are the full description strings.
 
 Hard requirements:
-- ≥250 characters per language (Edge's minimum — shorter entries get skipped); aim for 300–900
+- ≥250 characters per language (Edge's minimum — shorter entries get skipped); **cap at 900** — if you exceed it you are listing features, not telling a story; cut until it fits
+- Write for ordinary users: a non-technical person should finish each bullet in five seconds. No developer jargon (things like "filter chips", "byte-level progress", "storage.local", "cookie", internal UI names); every bullet says **what the user gets**, not what the feature is called
 - Plain text only: use \n for line breaks and • for bullets; no Markdown/HTML (stores don't render it)
 - Claims must match real functionality — exaggeration violates both stores' policies
 - No keyword stuffing (Chrome has an explicit Keyword Spam policy)
 
 Recommended structure (consistent across languages):
 1. One-line positioning: what + for whom + core value (with your strongest real number)
-2. "Key features:" + 3–5 bullets (how to open it, shortcuts, language/theme support)
-3. One closing line: content source / update cadence / differentiator
+2. 3–6 bullets, **one line each, ≤~120 chars** — an action and its payoff, never a parameter dump
+3. One closing line: privacy promise / open source / differentiator — pick one
+- Don't enumerate permissions; the store page already lists each permission with its own justification. Settings details (defaults, folder names) belong in the UI and README, not here.
 
 Localization: rewrite for local search and reading habits rather than translating literally; keep product/platform names (ChatGPT etc.) as-is; mind natural RTL flow for Arabic.
 
@@ -103,7 +108,8 @@ Term mix (~7 per language, localized to how people actually search):
 
 ## Step 4: Self-check before output
 - [ ] Both files are valid UTF-8 JSON
-- [ ] Every description ≥250 chars
+- [ ] Every description ≥250 and ≤900 chars
+- [ ] ≤6 bullets, one line each; re-read as a non-developer — no words only builders understand
 - [ ] Terms: ≤7 per language, ≤30 chars each, ≤21 distinct words
 - [ ] Language keys match the extension's supported languages
 - [ ] Every number/claim is traceable in the project
