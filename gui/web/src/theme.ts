@@ -21,6 +21,12 @@ export const themeConfig: ThemeConfig = {
     colorBorderSecondary: '#182739',
     colorTextSecondary: '#9DB2C9',
     colorTextTertiary: '#7E96B0',
+    // 实心键（主键 / 危险键）上的字。antd 默认给白字，压在仪表青上只有 2.7:1、压在珊瑚上 2.1:1，
+    // 主操作键反而读不清；深墨压在这两色上都在 6:1 以上。
+    colorTextLightSolid: '#06202A',
+    // 焦点晕统一走仪表青。不显式钉住的话，antd 会从主色派生出一个偏绿的 outline（实测 rgba(99,252,115,.16)），
+    // 既不在调色板里也和别的控件对不上。
+    controlOutline: 'rgba(55, 198, 214, 0.22)',
     borderRadius: 10,
     fontSize: 14,
     wireframe: false,

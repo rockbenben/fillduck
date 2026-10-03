@@ -270,7 +270,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && url.pathname === '/') {
       const html = await readFile(path.join(WEB_DIST, 'index.html'));
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(html); return;
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' }); res.end(html); return;
     }
     if (req.method === 'GET' && url.pathname === '/state') {
       // 读也入锁：writeFile 是「先截断再写」，锁外读会撞上半截文件——
@@ -384,7 +384,13 @@ const server = http.createServer(async (req, res) => {
       if (filePath.startsWith(WEB_DIST)) {
         try {
           const buf = await readFile(filePath);
-          res.writeHead(200, { 'Content-Type': MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream' });
+          // /assets/ 下的文件名带内容哈希：不声明缓存的话每次刷新都重下一遍整包
+          // （DevTools 实测一次重载 778KB 白走），而 index.html 反过来必须不缓存，
+          // 否则前端改了却还发旧界面。
+          const cache = rel.startsWith('assets/')
+            ? 'public, max-age=31536000, immutable'
+            : 'no-cache';
+          res.writeHead(200, { 'Content-Type': MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream', 'Cache-Control': cache });
           res.end(buf); return;
         } catch { /* 落到 404 */ }
       }

@@ -7,9 +7,11 @@ import {
 import {
   ChromeOutlined, GlobalOutlined, LoginOutlined, ThunderboltFilled,
   SaveOutlined, CodeOutlined, CheckCircleFilled, StopOutlined, DeleteOutlined, CopyOutlined, UploadOutlined,
-  TagsOutlined, PlusOutlined, EditOutlined, FireOutlined, GithubOutlined, PartitionOutlined,
+  TagsOutlined, PlusOutlined, EditOutlined, FireOutlined, GithubOutlined, PartitionOutlined, QuestionCircleOutlined,
 } from '@ant-design/icons';
 import { parseInput, parseTerms } from '../../../src/core.mjs'; // 复用后端同一份校验，规则完全一致
+import { translateLog, logLevelOf } from '../../../src/logmap.mjs'; // 运行日志的双语显示层（与日志源头同一份表）
+import { readRun, tally } from '../../../src/runread.mjs'; // 从日志原文读「每项跑到哪 / 这轮结果」
 import { ALL_UNITS, STORE_TO_UNITS } from '../../../src/units.mjs'; // 执行单元定义与后端共用一份，防漂移
 import LocaleSelect from './LocaleSelect.tsx';
 import type { LocaleItem, LocaleStore } from './LocaleSelect.tsx';
@@ -22,98 +24,155 @@ type SseMsg =
   | { type: 'status'; status: string; epoch?: string };
 type SaveResult = { ok: boolean; error?: string };
 
-// 界面文案（中/英）。后台运行日志由服务端产出，仍为中文。
+// 界面文案（中/英）。运行日志由服务端产出（中文），显示层按界面语言翻译，见 src/logmap.mjs。
 const STR = {
   zh: {
-    title: '填鸭控制台',
-    fanout: (n: number) => (n ? `一份源文案 · 分发到 3 商店 × ${n} 语言` : '一份源文案 · 分发到 Chrome / Edge / Firefox'),
+    docTitle: 'FillDuck 填鸭 · 多语言填充控制台',
+    htmlLang: 'zh-CN',
+    fanout: (n: number) => (n ? `一份文案 → 3 个商店 · ${n} 种语言` : '一份文案 → Chrome / Edge / Firefox 三个商店'),
     running: '运行中', idle: '空闲',
     targets: '目标后台', chromeLabel: 'CHROME 编辑页', edgeLabel: 'EDGE 列表页', firefoxLabel: 'FIREFOX 编辑页',
-    projectLabel: '当前项目', projectNew: '新建', projectRename: '重命名', projectDelete: '删除',
+    projectLabel: '项目', projectNew: '新建', projectRename: '重命名', projectDelete: '删除',
     projectNamePh: '项目名（如扩展名称）', projectCreate: '创建', projectOk: '确定', cancel: '取消',
-    projectDeleteConfirm: (n: string) => `确定删除项目「${n}」？其链接与文案文件将被删除，不可撤销。`,
-    firefoxUrlWarn: '看起来不像 AMO 编辑页（应含 /developers/addon/<名>/edit）',
-    loadFailed: '加载项目状态失败，已暂停自动保存——请确认服务在运行后刷新页面',
-    saveRejected: (e: string) => `保存被服务端拒绝（${e}），请刷新页面后重试`,
-    serverRestarted: '服务已重启，之前的运行已中断（运行状态已重置，请查看日志确认实际进度）',
-    logGap: (n: number) => `…（断线期间约 ${n} 行日志已滚出服务端缓冲，未能显示，其中可能含错误行）`,
+    needName: '名字不能为空', projectTaken: (n: string) => `已经有叫「${n}」的项目了，换一个名字`,
+    skipToRun: '跳到操作区',
+    stepLink: '填后台链接', stepCopy: '贴多语言文案', stepRun: '开始填充', stepNow: '现在做这一步',
+    projectDeleteConfirm: (n: string) => `删除项目「${n}」？它的链接和文案会一起删掉，删了找不回来。`,
+    chromeUrlWarn: '这看起来不是 Chrome 的编辑页。',
+    edgeUrlWarn: '这看起来不是 Edge 的列表页。',
+    firefoxUrlWarn: '这看起来不是 Firefox 的编辑页。',
+    urlRuleChrome: 'Chrome：地址里要有 devconsole，并以 /edit 结尾。',
+    urlRuleEdge: 'Edge：地址要是 …/microsoftedge/<编号>/listings。',
+    urlRuleFirefox: 'Firefox：地址要是 …/developers/addon/<名称>/edit。',
+    loadFailed: '没能读到项目内容，先别改 —— 确认服务在跑，再刷新页面。',
+    // 服务端回的是内部错误码（如 stale project），不能原样端给用户；映射成人话。
+    saveRejected: (e: string) => (/stale/i.test(e)
+      ? '这个页面已经不是当前项目了（别处在别的页面切走了）。刷新就能同步回来。'
+      : `没保存上（${e}），刷新页面后重试。`),
+    serverRestarted: '服务重启过，上一次填充被打断了 —— 看日志确认填到哪儿了。',
+    logGap: (n: number) => `…断线期间有 ${n} 行日志没接上，其中可能有报错。`,
     sourceTitle: '源文案',
-    copyLabel: '多语言描述 JSON', langs: (n: number) => `${n} 种语言`, short: (n: number) => ` · ${n} 种 <250 字`,
-    jsonBad: 'JSON 格式有误', jsonHint: '检查：引号/逗号是否配对、结尾别多写逗号；描述里的换行要写成 \\n（不能直接回车换行）。',
-    jsonFormat: '标准 JSON：{ "语言码": "完整描述", … } —— 键和值都用英文双引号 "，多项之间用逗号分隔，最后一项后不加逗号。',
-    loadSample: '填入样例', sampleLoaded: '已填入样例，按需修改后保存', sampleBusy: '文案框已有内容；清空后再填样例。',
-    needUrlLogin: '先填后台链接（至少一个）再登录',
-    clear: '清空', clearConfirm: '确定清空文案框？不可撤销。', autosaved: '改动自动保存',
-    importFile: '导入文件', imported: '已从文件导入文案', importFail: '读取文件失败',
-    save: '保存', saved: '已保存链接与文案',
+    copyLabel: '多语言描述', langs: (n: number) => `${n} 种语言`, short: (n: number) => ` · ${n} 种不足 250 字`,
+    jsonBad: '格式不对',
+    jsonHint: '多半是最后多了一个逗号。想分段就空一行写，别直接回车。',
+    jsonFormat: '每种语言一行："语言码": "描述"。',
+    jsonFormatTip: '标准 JSON：{ "语言码": "完整描述", … } —— 键和值都用英文双引号 "，多项之间用逗号分隔，最后一项后不加逗号。描述里的换行要写成 \\n（不能直接回车换行）。',
+    loadSample: '填入样例', sampleLoaded: '已填入样例，改完就能用', sampleBusy: '描述框已有内容；清空后再填样例。',
+    needUrlLogin: '先填一个后台链接再登录',
+    clear: '清空', clearConfirm: '清空这份多语言描述？清完可以从文件重新导入。',
+    savedAt: (ts: string) => `已保存 · ${ts}`, neverSaved: '还没保存过', saveNow: '立即写盘',
+    linkDigest: (host: string, tail: string) => `${host} · …/${tail}`,
+    importFile: '导入文件', imported: '已从文件导入描述', importFail: '读不了这个文件',
+    saved: '链接与文案已保存',
     login: '登录后台', loginNote: '登录态会记住，只需一次',
-    loginToast: '已打开后台，请在弹出的浏览器里登录 Google / Microsoft / Mozilla（按你填的后台）',
+    loginToast: '后台已经打开，在弹出的浏览器里登录 Google / Microsoft / Mozilla（按你填的后台）。',
     run: '开始填充', runningBtn: '填充中…', stop: '停止', exec: '执行',
     unitChromeDesc: 'Chrome 描述', unitEdgeDesc: 'Edge 描述', unitEdgeTerms: 'Edge 搜索词', unitFirefoxDesc: 'Firefox 描述',
-    needUnit: '勾选至少一项要填的内容', needSetup: '先填好后台链接和对应的描述/搜索词', unitNoUrl: '缺后台链接', unitNoContent: '缺内容',
-    execNote: '会弹出真实浏览器逐步操作；跑完不自动关，请人工检查后自行提交。Edge 描述每种需 ≥250 字；Firefox(AMO) 描述每种上限 15000 字、保存即生效，Chrome/Edge 只写草稿。',
-    logsTitle: '运行日志', lines: (n: number) => `${n} 行`, logsEmpty: '// 等待开始…日志会实时显示在这里',
-    copyLogs: '复制日志', logsCopied: '日志已复制', logsCopyFail: '复制失败，请手动选择',
-    chromeUrlWarn: '看起来不像 Chrome 编辑页（应含 devconsole 且以 /edit 结尾）',
-    edgeUrlWarn: '看起来不像 Edge 列表页（应含 …/microsoftedge/<id>/listings）',
-    runDone: '本次任务结束，请查看日志确认结果', runFailed: '任务中出现错误，请查看日志',
-    termsLabel: '搜索词 JSON（仅 Edge）', termsLangs: (n: number) => `${n} 种语言`,
-    termsFormat: '标准 JSON：{ "语言码": ["词1","词2"] }，值是搜索词数组。规则：每语言最多 7 个词、每词 ≤30 字符、所有词的独立词语 ≤21；超出的会自动丢弃。',
-    termsDropped: (n: number) => `已自动丢弃 ${n} 个不合规的词（超 7 个 / 超 30 字符 / 独立词超 21）`,
+    needUnit: '还差一步：勾上要填的内容', needSetup: '还差一步：填后台链接',
+    unitNoUrl: '还没填链接', unitNoContent: '还没有这一项的内容',
+    needLocale: '还差一步：至少勾一种语言',
+    execNote: '会打开真浏览器一项项填，填完不关窗口 —— 检查过再由你提交。',
+    execNoteTip: 'Edge 描述每种需 ≥250 字；Firefox(AMO) 描述每种上限 15000 字、保存即生效；Chrome / Edge 只写草稿。',
+    allUnits: (n: number) => `全部 ${n} 项`,
+    willFill: (items: string, n: number) => `本次会填：${items}（${n} 种语言）`,
+    willFillNone: '本次会填：还没有可填项（每项不能选的原因见上面）',
+    // 运行读数（U4）与结果条（U5）：同一排格子，跑的时候是进度，跑完就是结果
+    runNow: '进行中', runResult: '本轮结果',
+    uPending: '未开始', uMissed: '没轮到', uPreparing: '准备中', uUnselected: '没选这项',
+    uOf: (n: number) => `共 ${n} 种`, uStoredDraft: (n: number) => `草稿 ${n} 种`, uStored: '已存住',
+    uHuman: (n: number) => `需人工 ${n} 种`, uSkipped: '已跳过', uFailed: '没跑成',
+    rStored: (n: number) => `${n} 项已存`, rHuman: (n: number) => `${n} 项需人工`,
+    rSkipped: (n: number) => `${n} 项跳过`, rFailed: (n: number) => `${n} 项没跑成`,
+    rRunning: (n: number) => `${n} 项停在半路`, rPending: (n: number) => `${n} 项没轮到`,
+    logsTitle: '运行日志', lines: (n: number) => `${n} 行`, logsEmpty: '还没跑过。跑起来后这里会一行行出。',
+    copyLogs: '复制日志', logsCopied: '日志已复制', logsCopyFail: '复制没成，请手动选中再复制',
+    runDone: '这一轮跑完了，结果在执行区那一行', runFailed: '这一轮有报错，执行区那行标出了哪几项没成',
+    termsLabel: '搜索词（只填 Edge）', termsLangs: (n: number) => `${n} 种语言`,
+    termsFormat: '每种语言最多 7 个词，每个词不超过 30 字。超出的会自动去掉。',
+    termsFormatTip: '标准 JSON：{ "语言码": ["词1","词2"] }，值是搜索词数组。规则：每语言最多 7 个词、每词 ≤30 字符、所有词的独立词语 ≤21；超出的会自动去掉。',
+    termsDropped: (n: number) => `已去掉 ${n} 个不合规则的词（太多 / 太长）。`,
     termsSample: '填入样例', termsSampleLoaded: '已填入搜索词样例', termsSampleBusy: '搜索词框已有内容；清空后再填样例。',
-    termsImported: '已从文件导入搜索词', termsClearConfirm: '确定清空搜索词框？不可撤销。',
+    termsImported: '已从文件导入搜索词', termsClearConfirm: '清空这份搜索词？清完可以从文件重新导入。',
     localesTitle: '语言 · 勾选生效', mShort: '<250',
     effOn: (n: number, m: number) => `${n} / ${m} 生效`, selAll: '全选', selNone: '全不选',
     localeEmpty: '填好上面的文案后，这里可勾选哪些语言本次生效（默认全选）。',
-    localeNote: '只有勾选的语言会被填充；右侧三点示意写入哪些商店（空心=Edge 不足 250 字将跳过，横杠=该商店未选）。',
-    needLocale: '至少勾选一种要填充的语言',
+    legendReady: '会写入', legendSkip: '太短，跳过', legendNa: '该商店未选',
+    locHidden: (n: number, m: number) => `这里显示 ${n} 种，共 ${m} 种，往下还能滚`,
+    rulesLink: '看规则',
   },
   en: {
-    title: 'FillDuck Console',
-    fanout: (n: number) => (n ? `One source · fanned out to 3 stores × ${n} locales` : 'One source · fans out to Chrome / Edge / Firefox'),
+    docTitle: 'FillDuck Console · multilingual store copy filler',
+    htmlLang: 'en',
+    fanout: (n: number) => (n ? `One copy → 3 stores · ${n} locales` : 'One copy → Chrome / Edge / Firefox'),
     running: 'RUNNING', idle: 'IDLE',
     targets: 'Target dashboards', chromeLabel: 'CHROME EDIT PAGE', edgeLabel: 'EDGE LISTINGS PAGE', firefoxLabel: 'FIREFOX EDIT PAGE',
-    projectLabel: 'PROJECT', projectNew: 'New', projectRename: 'Rename', projectDelete: 'Delete',
+    projectLabel: 'Project', projectNew: 'New', projectRename: 'Rename', projectDelete: 'Delete',
     projectNamePh: 'Project name (e.g. extension name)', projectCreate: 'Create', projectOk: 'OK', cancel: 'Cancel',
-    projectDeleteConfirm: (n: string) => `Delete project "${n}"? Its links and copy files will be removed. This cannot be undone.`,
-    firefoxUrlWarn: 'Doesn’t look like an AMO edit page (should contain /developers/addon/<slug>/edit)',
-    loadFailed: 'Failed to load project state; autosave paused — make sure the server is running, then refresh',
-    saveRejected: (e: string) => `Save rejected by the server (${e}) — refresh the page and try again`,
-    serverRestarted: 'Server restarted — the previous run was interrupted (running state reset; check the log for actual progress)',
-    logGap: (n: number) => `…(about ${n} log line(s) rolled out of the server buffer while disconnected — some may be errors)`,
+    needName: 'A name is required', projectTaken: (n: string) => `There is already a project called "${n}" — pick another name`,
+    skipToRun: 'Skip to actions',
+    stepLink: 'Add dashboard links', stepCopy: 'Paste your copy', stepRun: 'Start filling', stepNow: 'do this now',
+    projectDeleteConfirm: (n: string) => `Delete project "${n}"? Its links and copy go with it — there is no undo.`,
+    chromeUrlWarn: 'This does not look like a Chrome edit page.',
+    edgeUrlWarn: 'This does not look like an Edge listings page.',
+    firefoxUrlWarn: 'This does not look like a Firefox edit page.',
+    urlRuleChrome: 'Chrome: the address contains devconsole and ends with /edit.',
+    urlRuleEdge: 'Edge: the address is …/microsoftedge/<id>/listings.',
+    urlRuleFirefox: 'Firefox: the address is …/developers/addon/<slug>/edit.',
+    loadFailed: 'Could not load the project — hold off editing, check the server is running, then refresh.',
+    saveRejected: (e: string) => (/stale/i.test(e)
+      ? 'This tab is no longer on the current project (another tab switched it). Refresh to sync.'
+      : `Save failed (${e}) — refresh and try again.`),
+    serverRestarted: 'The server restarted and the last run was interrupted — check the log for real progress.',
+    logGap: (n: number) => `…${n} log line(s) were lost while disconnected — some may be errors.`,
     sourceTitle: 'Source copy',
-    copyLabel: 'Multilingual copy (JSON)', langs: (n: number) => `${n} locales`, short: (n: number) => ` · ${n} <250 chars`,
-    jsonBad: 'Invalid JSON', jsonHint: 'Check: matching quotes/commas, no trailing comma; line breaks inside a value must be written as \\n (not a real newline).',
-    jsonFormat: 'Standard JSON: { "locale": "full description", … } — quote every key and value with ", separate items with commas, no comma after the last one.',
-    loadSample: 'Load sample', sampleLoaded: 'Sample loaded — edit it, then Save', sampleBusy: 'The box already has content — clear it first.',
-    needUrlLogin: 'Add a dashboard URL first (at least one)',
-    clear: 'Clear', clearConfirm: 'Clear the copy box? This cannot be undone.', autosaved: 'Changes auto-saved',
-    importFile: 'Import file', imported: 'Copy imported from file', importFail: 'Failed to read file',
-    save: 'Save', saved: 'Links & copy saved',
+    copyLabel: 'Multilingual descriptions', langs: (n: number) => `${n} locales`, short: (n: number) => ` · ${n} under 250 chars`,
+    jsonBad: 'Bad format',
+    jsonHint: 'Usually a trailing comma. To start a new paragraph, leave a blank line — do not press Enter.',
+    jsonFormat: 'One line per language: "locale": "description".',
+    jsonFormatTip: 'Standard JSON: { "locale": "full description", … } — quote every key and value with ", separate items with commas, no comma after the last one. Line breaks inside a value must be written as \\n (not a real newline).',
+    loadSample: 'Load sample', sampleLoaded: 'Sample loaded — edit it and go', sampleBusy: 'The box already has content — clear it first.',
+    needUrlLogin: 'Add a dashboard link first',
+    clear: 'Clear', clearConfirm: 'Clear these descriptions? You can import them from a file again.',
+    savedAt: (ts: string) => `Saved · ${ts}`, neverSaved: 'Not saved yet', saveNow: 'Write now',
+    linkDigest: (host: string, tail: string) => `${host} · …/${tail}`,
+    importFile: 'Import file', imported: 'Descriptions imported from file', importFail: 'Could not read that file',
+    saved: 'Links & copy saved',
     login: 'Log in', loginNote: 'Login is remembered — only once',
-    loginToast: 'Dashboards opened — log in to Google / Microsoft / Mozilla (whichever you configured) in the browser window',
+    loginToast: 'Dashboards opened — log in to Google / Microsoft / Mozilla (whichever you configured) in the browser window.',
     run: 'Start', runningBtn: 'Filling…', stop: 'Stop', exec: 'Run',
-    unitChromeDesc: 'Chrome desc', unitEdgeDesc: 'Edge desc', unitEdgeTerms: 'Edge terms', unitFirefoxDesc: 'Firefox desc',
-    needUnit: 'Check at least one thing to fill', needSetup: 'Add a dashboard URL and its description / search terms first', unitNoUrl: 'no URL', unitNoContent: 'no content',
-    execNote: 'A real browser opens and acts step by step; it stays open when done — review, then submit yourself. Edge needs ≥250 chars per description; Firefox (AMO) caps each at 15,000 chars and saves directly, while Chrome/Edge write drafts only.',
-    logsTitle: 'Run log', lines: (n: number) => `${n} lines`, logsEmpty: '// Waiting to start… logs appear here live',
-    copyLogs: 'Copy log', logsCopied: 'Log copied', logsCopyFail: 'Copy failed — select manually',
-    chromeUrlWarn: 'Doesn’t look like a Chrome edit page (should contain devconsole and end with /edit)',
-    edgeUrlWarn: 'Doesn’t look like an Edge listings page (should contain …/microsoftedge/<id>/listings)',
-    runDone: 'Run finished — check the log for results', runFailed: 'The run hit an error — check the log',
-    termsLabel: 'Search terms (JSON, Edge only)', termsLangs: (n: number) => `${n} locales`,
-    termsFormat: 'Standard JSON: { "locale": ["term1","term2"] }, value is an array of terms. Rules: ≤7 terms per language, ≤30 chars each, ≤21 distinct words total; anything over is dropped automatically.',
-    termsDropped: (n: number) => `${n} non-compliant term(s) dropped automatically (>7 / >30 chars / >21 distinct words)`,
+    unitChromeDesc: 'Chrome descriptions', unitEdgeDesc: 'Edge descriptions', unitEdgeTerms: 'Edge search terms', unitFirefoxDesc: 'Firefox descriptions',
+    needUnit: 'One step left: pick what to fill', needSetup: 'One step left: add a dashboard link',
+    unitNoUrl: 'no link yet', unitNoContent: 'nothing to fill here yet',
+    needLocale: 'One step left: pick at least one locale',
+    execNote: 'A real browser opens and fills one item at a time; it stays open — review, then submit yourself.',
+    execNoteTip: 'Edge needs ≥250 characters per description; Firefox (AMO) caps each at 15,000 characters and saves directly; Chrome and Edge only write drafts.',
+    allUnits: (n: number) => `all ${n} items`,
+    willFill: (items: string, n: number) => `This run will fill: ${items} (${n} locales)`,
+    willFillNone: 'This run will fill: nothing yet — each box above says why',
+    runNow: 'In progress', runResult: 'This run',
+    uPending: 'waiting', uMissed: 'not reached', uPreparing: 'starting', uUnselected: 'not selected',
+    uOf: (n: number) => `${n} to go`, uStoredDraft: (n: number) => `draft ×${n}`, uStored: 'saved',
+    uHuman: (n: number) => `check ${n}`, uSkipped: 'skipped', uFailed: 'failed',
+    rStored: (n: number) => `${n} saved`, rHuman: (n: number) => `${n} to check`,
+    rSkipped: (n: number) => `${n} skipped`, rFailed: (n: number) => `${n} failed`,
+    rRunning: (n: number) => `${n} stopped partway`, rPending: (n: number) => `${n} not reached`,
+    logsTitle: 'Run log', lines: (n: number) => `${n} lines`, logsEmpty: 'Nothing has run yet. Lines appear here while it runs.',
+    copyLogs: 'Copy log', logsCopied: 'Log copied', logsCopyFail: 'Copy failed — select the text manually',
+    runDone: 'Run finished — the outcome is on the Run line', runFailed: 'The run hit errors — the Run line shows which ones',
+    termsLabel: 'Search terms (Edge only)', termsLangs: (n: number) => `${n} locales`,
+    termsFormat: 'Up to 7 terms per language, 30 characters each. Anything over is dropped.',
+    termsFormatTip: 'Standard JSON: { "locale": ["term1","term2"] }, value is an array of terms. Rules: ≤7 terms per language, ≤30 chars each, ≤21 distinct words total; anything over is dropped automatically.',
+    termsDropped: (n: number) => `Dropped ${n} term(s) that broke the rules (too many / too long).`,
     termsSample: 'Load sample', termsSampleLoaded: 'Search-term sample loaded', termsSampleBusy: 'The terms box already has content — clear it first.',
-    termsImported: 'Search terms imported from file', termsClearConfirm: 'Clear the search-terms box? This cannot be undone.',
+    termsImported: 'Search terms imported from file', termsClearConfirm: 'Clear these search terms? You can import them from a file again.',
     localesTitle: 'Locales · check to fill', mShort: '<250',
     effOn: (n: number, m: number) => `${n} / ${m} on`, selAll: 'All', selNone: 'None',
     localeEmpty: 'Add copy above, then pick which locales this run fills (all on by default).',
-    localeNote: 'Only checked locales get filled; the three dots show which stores each goes to (hollow = Edge skips it under 250 chars, dash = store not selected).',
-    needLocale: 'Check at least one locale to fill',
+    legendReady: 'will fill', legendSkip: 'too short, skipped', legendNa: 'store not selected',
+    locHidden: (n: number, m: number) => `showing ${n} of ${m} — scroll for more`,
+    rulesLink: 'See the rules',
   },
 };
-
 type Dict = (typeof STR)['zh'];
 
 // 可直接编辑的样例文案：演示标准 JSON 形状 + 描述内换行用 \n。
@@ -151,11 +210,20 @@ function detectLang(): Lang {
   return (navigator.language || '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
 }
 
-function classify(msg: string): string {
-  if (/出错|失败|❌|\[x\]/.test(msg)) return 'err';
+// 表外行的兜底分色：日志文案表（src/logmap.mjs）命中时用表里的级别，这里只兜未登记的行。
+function classify(msg: string): string {  if (/出错|失败|❌|\[x\]/.test(msg)) return 'err';
   if (/完成|成功|✅/.test(msg)) return 'ok';
   if (/提示|注意|跳过|忽略|缺|不足|未找到/.test(msg)) return 'warn';
   return '';
+}
+
+// 规则细节收在这里：屏上只留一句「下一步做什么」，长句要读的人主动点开看。
+function RulesTip({ text, label }: { text: string; label: string }) {
+  return (
+    <Tooltip title={text} styles={{ root: { maxWidth: 420 } }}>
+      <Button className="fd-rules" size="small" variant="text" color="default" icon={<QuestionCircleOutlined />}>{label}</Button>
+    </Tooltip>
+  );
 }
 
 export default function App() {
@@ -172,6 +240,10 @@ export default function App() {
   const [projModal, setProjModal] = useState<ProjModal>(null);
   const [logs, setLogs] = useState<LogLine[]>([]);
   const [running, setRunning] = useState(false);
+  // /state 落地前不要渲染「会随数据消失」的块（三步条、链接摘要）：
+  // 否则首帧画出它们、数据一到又抽走，整页往下跳一次（DevTools CLS 实测 0.11 的主因之一）。
+  const [loaded, setLoaded] = useState(false);
+  const [savedAt, setSavedAt] = useState(''); // 最近一次写盘成功的时刻（空=本次会话还没存过）
   // 执行单元多选：后台 × 内容 的最小粒度，可独立勾选（Edge 的描述与搜索词分开）。
   const [units, setUnits] = useState<string[]>(() => {
     try {
@@ -208,6 +280,13 @@ export default function App() {
   // 只被异步回调读取，晚一帧同步没有影响。
   useEffect(() => { tRef.current = t; });
 
+  // 界面语言要走到文档层：标签页标题、<html lang> 和排印档（字距/大写只给拉丁）都跟着切换。
+  // 以前切到 EN 后标题仍是中文、lang 仍是 zh-CN，读屏与浏览器都以为页面是中文。
+  useEffect(() => {
+    document.title = t.docTitle;
+    document.documentElement.lang = t.htmlLang;
+  }, [t]);
+
   const onLangChange = (v: Lang) => {
     setLang(v);
     try { localStorage.setItem('fillduck_ui_lang', v); } catch { /* ignore */ }
@@ -226,7 +305,10 @@ export default function App() {
       chromeEditUrl: chromeUrl.trim(), edgeListingsUrl: edgeUrl.trim(), firefoxEditUrl: firefoxUrl.trim(),
       copy, terms,
     }),
-  }).then((r) => r.json());
+  }).then((r) => r.json()).then((j: SaveResult) => { if (j && j.ok) setSavedAt(clock()); return j; });
+
+  // 写盘成功的那一刻要能在屏上报出来（「已保存 · 19:21:58」），而不是空喊一句「改动自动保存」。
+  const clock = () => new Date().toTimeString().slice(0, 8);
 
   // 整体载入当前项目。载入期间冻结自动保存；失败时保持冻结并提示，否则空表单会被自动保存进真实项目。
   const loadState = async () => {
@@ -241,6 +323,7 @@ export default function App() {
       setCopy(s.copy || '');
       setTerms(s.terms || '');
       loadedRef.current = true;
+      setLoaded(true);
     } catch {
       message.error(tRef.current.loadFailed);
     }
@@ -280,7 +363,8 @@ export default function App() {
           maxSeqRef.current = d.seq;
         }
         const ts = new Date().toTimeString().slice(0, 8);
-        const cls = classify(d.msg);
+        // 分色优先看文案表的级别；表外的行（异常原文、第三方输出）才落到中文关键词兜底
+        const cls = logLevelOf(d.msg) ?? classify(d.msg);
         if (cls === 'err') runErrRef.current = true; // 不依赖 runningRef：新开页面时重放的错误行先于状态帧到达，也要计入
         const id = logIdRef.current++;
         setLogs((prev) => [...prev.slice(-799), { id, ts, msg: d.msg, cls }]);
@@ -431,7 +515,8 @@ export default function App() {
     reader.readAsText(file);
   };
   const onCopyLogs = async () => {
-    const text = logs.map((l) => `${l.ts} ${l.msg}`).join('\n');
+    // 复制的是「看到的那份」：英文界面下贴出去的东西也该是英文
+    const text = logs.map((l) => `${l.ts} ${lang === 'en' ? translateLog(l.msg) : l.msg}`).join('\n');
     try { await navigator.clipboard.writeText(text); message.success(t.logsCopied); }
     catch { message.error(t.logsCopyFail); }
   };
@@ -521,11 +606,65 @@ export default function App() {
   // 能否开跑：先要有可执行单元；再要求至少选中一种语言（有 copy 语言时）。
   const runReason = effectiveUnits.length ? (noLocale ? t.needLocale : '') : (anyRunnable ? t.needUnit : t.needSetup);
   const canRun = !runReason;
+  const willFillText = effectiveUnits.length
+    ? t.willFill(effectiveUnits.length === ALL_UNITS.length ? t.allUnits(effectiveUnits.length)
+        : effectiveUnits.map((u) => unitMeta.find((m) => m.key === u)?.label || u).join(' · '), selectedLocales.length)
+    : t.willFillNone;
+  // U4/U5：跑起来之后，同一个位置从「本次会填」换成实时进度，跑完换成常驻结果条。
+  // 读数从日志原文解析（src/runread.mjs），不依赖服务端上报，也不靠 3 秒自隐的 toast。
+  const runRead = useMemo(() => readRun(logs.map((l) => l.msg)), [logs]);
+  const pickedUnits = new Set(effectiveUnits);
+  const runTallyText = (() => {
+    if (runRead.mode !== 'result') return '';
+    const c = tally(runRead.units.filter((u) => pickedUnits.has(u.key)));
+    return [c.stored && t.rStored(c.stored), c.review && t.rHuman(c.review),
+      c.skipped && t.rSkipped(c.skipped), c.failed && t.rFailed(c.failed),
+      c.running && t.rRunning(c.running), c.pending && t.rPending(c.pending)].filter(Boolean).join(' · ');
+  })();
+  const pillText = (st: string, u: { i: number; n: number; filled: number; human: number }) => {
+    if (st === 'unselected') return t.uUnselected;
+    if (st === 'running') return u.i && u.n ? `${u.i}/${u.n}` : u.n ? t.uOf(u.n) : t.uPreparing;
+    if (st === 'stored') return u.filled ? t.uStoredDraft(u.filled) : t.uStored;
+    if (st === 'review') return u.human ? t.uHuman(u.human) : t.uStored;
+    if (st === 'skipped') return t.uSkipped;
+    if (st === 'failed') return t.uFailed;
+    return runRead.mode === 'result' ? t.uMissed : t.uPending;
+  };
+  // 首屏引导：三件事没做完之前，把顺序摆在最上面（以前是六张平铺的卡 + 一句 17 字提示）
+  const setupDone = hasAnyUrl && hasValidDesc && canRun;
+
+  // 项目名弹窗：以前空名字时「确定」照样能点，按下去 if (!v) return —— 毫无反馈（实测）。
+  const projName = (projModal && projModal.value || '').trim();
+  const projDup = !!projName && projName !== active && projects.includes(projName);
+  const projHint = !projName ? t.needName : projDup ? t.projectTaken(projName) : '';
+
+  // 日志行只在【日志变了】的时候才重建。以前每次按键都重渲染整棵树，800 行日志时
+  // 实测一次输入要同步花掉 ~31ms（DevTools trace：40 键累计 286ms 强制回流）。
+  // 元素引用不变，React 就能整棵子树跳过 reconcile。
+  const logRows = useMemo(() => logs.map((l) => (
+    <div key={l.id} className={`ln ${l.cls}`}>
+      <span className="ts">{l.ts}</span>{lang === 'en' ? translateLog(l.msg) : l.msg}
+    </div>
+  )), [logs, lang]);
 
   const labelStyle: React.CSSProperties = { display: 'block', marginBottom: 6, color: 'var(--fd-muted)', fontSize: 12, letterSpacing: '0.04em' };
 
+
+
+  // 链接框只有 337px 宽，长 URL 的尾部（扩展 ID / slug / 是不是 /edit）永远看不见。
+  // 在框下把「域名 · 末两段」摊出来，用户能一眼核对有没有粘错地址。
+  const digest = (u: string) => {
+    try {
+      const x = new URL(u);
+      const tail = x.pathname.split('/').filter(Boolean).slice(-2).map((s) => decodeURIComponent(s)).join('/') || x.pathname;
+      return t.linkDigest(x.host, tail);
+    } catch { return ''; }
+  };
+
   return (
-    <div className="fd-shell">
+    <main className="fd-shell" data-lang={lang}>
+      {/* 键盘用户的捷径：主操作键以前排在第 47 站之后（24 行语言各占一站） */}
+      <a className="fd-skip" href="#fd-exec">{t.skipToRun}</a>
       {/* 头部 */}
       <Flex justify="space-between" align="flex-end" wrap className="rise" style={{ marginBottom: 26, gap: 16 }}>
         <div className="fd-brand">
@@ -551,12 +690,22 @@ export default function App() {
         </div>
       </Flex>
 
+      {/* 首屏三步条：没配好时告诉你先做哪一步，做完一步自动打勾（配齐就消失） */}
+      {!loaded || setupDone ? null : (
+        <div className="fd-steps" role="status">
+          <span className={`fd-step ${hasAnyUrl ? 'done' : 'now'}`}><b>1</b>{t.stepLink}{!hasAnyUrl && <em>{t.stepNow}</em>}</span>
+          <span className={`fd-step ${hasValidDesc ? 'done' : (hasAnyUrl ? 'now' : '')}`}><b>2</b>{t.stepCopy}{hasAnyUrl && !hasValidDesc && <em>{t.stepNow}</em>}</span>
+          <span className={`fd-step ${canRun && hasAnyUrl && hasValidDesc ? 'now' : ''}`}><b>3</b>{t.stepRun}{canRun && hasAnyUrl && hasValidDesc && <em>{t.stepNow}</em>}</span>
+        </div>
+      )}
+
       {/* 目标后台：项目 + 三商店链接 */}
       <Card className="rise" style={{ marginBottom: 16, animationDelay: '0.05s' }} styles={{ body: { padding: 22 } }}>
         <div className="fd-eyebrow"><GlobalOutlined style={{ color: 'var(--fd-cyan)' }} />{t.targets}</div>
         <Flex align="center" gap={8} wrap style={{ marginBottom: 16 }}>
           <span className="fd-label" style={{ fontSize: 11 }}>{t.projectLabel}</span>
           <Select
+            aria-label={t.projectLabel}
             style={{ minWidth: 210 }} value={active || undefined} disabled={running}
             onChange={onSelectProject}
             options={projects.map((p) => ({ label: p, value: p }))}
@@ -571,19 +720,37 @@ export default function App() {
         </Flex>
         <div className="fd-field-grid">
           <div>
-            <label style={labelStyle}>{t.chromeLabel}</label>
-            <Input className="fd-url" prefix={<ChromeOutlined style={{ color: '#6FB1EE' }} />} placeholder="https://chrome.google.com/webstore/devconsole/.../edit" value={chromeUrl} onChange={(e) => setChromeUrl(e.target.value)} />
-            {chromeUrlWarn && <span className="fd-hint warn" style={{ marginTop: 5 }}>{t.chromeUrlWarn}</span>}
+            <label style={labelStyle} htmlFor="fd-url-chrome">{t.chromeLabel}</label>
+            <Input id="fd-url-chrome" className="fd-url" prefix={<ChromeOutlined style={{ color: '#6FB1EE' }} />} placeholder="https://chrome.google.com/webstore/devconsole/.../edit" value={chromeUrl} onChange={(e) => setChromeUrl(e.target.value)} />
+            {chromeUrlWarn && (
+              <div className="fd-hint-row">
+                <span className="fd-hint warn">{t.chromeUrlWarn}</span>
+                <RulesTip text={t.urlRuleChrome} label={t.rulesLink} />
+              </div>
+            )}
+            {cUrl && !chromeUrlWarn && <span className="fd-digest" style={{ marginTop: 5 }}>{digest(cUrl)}</span>}
           </div>
           <div>
-            <label style={labelStyle}>{t.edgeLabel}</label>
-            <Input className="fd-url" prefix={<GlobalOutlined style={{ color: '#58C0AE' }} />} placeholder="https://partner.microsoft.com/.../listings" value={edgeUrl} onChange={(e) => setEdgeUrl(e.target.value)} />
-            {edgeUrlWarn && <span className="fd-hint warn" style={{ marginTop: 5 }}>{t.edgeUrlWarn}</span>}
+            <label style={labelStyle} htmlFor="fd-url-edge">{t.edgeLabel}</label>
+            <Input id="fd-url-edge" className="fd-url" prefix={<GlobalOutlined style={{ color: '#58C0AE' }} />} placeholder="https://partner.microsoft.com/.../listings" value={edgeUrl} onChange={(e) => setEdgeUrl(e.target.value)} />
+            {edgeUrlWarn && (
+              <div className="fd-hint-row">
+                <span className="fd-hint warn">{t.edgeUrlWarn}</span>
+                <RulesTip text={t.urlRuleEdge} label={t.rulesLink} />
+              </div>
+            )}
+            {eUrl && !edgeUrlWarn && <span className="fd-digest" style={{ marginTop: 5 }}>{digest(eUrl)}</span>}
           </div>
           <div>
-            <label style={labelStyle}>{t.firefoxLabel}</label>
-            <Input className="fd-url" prefix={<FireOutlined style={{ color: '#F0925C' }} />} placeholder="https://addons.mozilla.org/.../developers/addon/<slug>/edit" value={firefoxUrl} onChange={(e) => setFirefoxUrl(e.target.value)} />
-            {firefoxUrlWarn && <span className="fd-hint warn" style={{ marginTop: 5 }}>{t.firefoxUrlWarn}</span>}
+            <label style={labelStyle} htmlFor="fd-url-firefox">{t.firefoxLabel}</label>
+            <Input id="fd-url-firefox" className="fd-url" prefix={<FireOutlined style={{ color: '#F0925C' }} />} placeholder="https://addons.mozilla.org/.../developers/addon/<slug>/edit" value={firefoxUrl} onChange={(e) => setFirefoxUrl(e.target.value)} />
+            {firefoxUrlWarn && (
+              <div className="fd-hint-row">
+                <span className="fd-hint warn">{t.firefoxUrlWarn}</span>
+                <RulesTip text={t.urlRuleFirefox} label={t.rulesLink} />
+              </div>
+            )}
+            {fUrl && !firefoxUrlWarn && <span className="fd-digest" style={{ marginTop: 5 }}>{digest(fUrl)}</span>}
           </div>
         </div>
       </Card>
@@ -593,10 +760,13 @@ export default function App() {
         okText={projModal && projModal.mode === 'create' ? t.projectCreate : t.projectOk}
         cancelText={t.cancel}
         onOk={onProjModalOk} onCancel={() => setProjModal(null)} destroyOnHidden width={360}
+        okButtonProps={{ disabled: !projName || projDup }}
       >
         <Input autoFocus placeholder={t.projectNamePh} value={(projModal && projModal.value) || ''}
           onChange={(e) => setProjModal((m) => (m ? { ...m, value: e.target.value } : m))}
           onPressEnter={onProjModalOk} />
+        {/* 名字不行就当场说，别等按下去没反应再让人猜（实测确定键可点、点了静默） */}
+        {projModal && projHint && <span className="fd-hint warn" style={{ marginTop: 8 }}>{projHint}</span>}
       </Modal>
 
       {/* 源文案 | 分发矩阵 */}
@@ -608,19 +778,23 @@ export default function App() {
               ? <Tag bordered={false} color="cyan">{t.langs(langInfo.n)}{langInfo.short ? t.short(langInfo.short) : ''}</Tag>
               : <Tag bordered={false} color="error">{t.jsonBad}</Tag>)}
           </Flex>
-          <label style={labelStyle}>{t.copyLabel}</label>
+          <label style={labelStyle} htmlFor="fd-copy">{t.copyLabel}</label>
           <Input.TextArea
+            id="fd-copy"
             className="fd-code"
             value={copy}
             onChange={(e) => setCopy(e.target.value)}
-            autoSize={{ minRows: 7, maxRows: 15 }}
+            rows={12}
             placeholder={'{\n  "en": "English description…",\n  "zh_CN": "中文描述…",\n  "pt_BR": "…"\n}'}
           />
-          <span className={`fd-hint ${jsonInvalid ? 'err' : ''}`} style={{ marginTop: 8 }}>
-            {jsonInvalid ? t.jsonHint : t.jsonFormat}
-          </span>
+          <div className="fd-hint-row">
+            <span className={`fd-hint ${jsonInvalid ? 'err' : ''}`}>
+              {jsonInvalid ? t.jsonHint : t.jsonFormat}
+            </span>
+            <RulesTip text={t.jsonFormatTip} label={t.rulesLink} />
+          </div>
 
-          <input ref={fileRef} type="file" accept=".json,.txt,application/json" style={{ display: 'none' }} onChange={onImportFile} />
+          <input ref={fileRef} name="import-copy" aria-label={t.copyLabel} type="file" accept=".json,.txt,application/json" style={{ display: 'none' }} onChange={onImportFile} />
           <Flex justify="space-between" align="center" wrap style={{ marginTop: 14, gap: 8 }}>
             <Space size={4}>
               <Button variant="text" color="default" size="small" icon={<CodeOutlined />} onClick={onLoadSample}>{t.loadSample}</Button>
@@ -630,8 +804,8 @@ export default function App() {
               </Popconfirm>
             </Space>
             <Space size={10} align="center">
-              <span style={{ color: 'var(--fd-dim)', fontSize: 12 }}>{t.autosaved}</span>
-              <Button variant="filled" color="default" icon={<SaveOutlined />} onClick={onSave}>{t.save}</Button>
+              <span className="fd-saved">{savedAt ? t.savedAt(savedAt) : t.neverSaved}</span>
+              <Button variant="filled" color="default" icon={<SaveOutlined />} onClick={onSave}>{t.saveNow}</Button>
             </Space>
           </Flex>
         </Card>
@@ -649,7 +823,7 @@ export default function App() {
             onAll={selectAllLocales}
             onNone={selectNoneLocales}
             emptyText={t.localeEmpty}
-            labels={{ on: t.effOn, all: t.selAll, none: t.selNone, short: t.mShort, note: t.localeNote }}
+            labels={{ on: t.effOn, all: t.selAll, none: t.selNone, short: t.mShort, ready: t.legendReady, skipped: t.legendSkip, notSelected: t.legendNa, hidden: t.locHidden }}
           />
         </Card>
       </div>
@@ -663,17 +837,22 @@ export default function App() {
             : <Tag bordered={false} color="error">{t.jsonBad}</Tag>)}
         </Flex>
         <Input.TextArea
+          id="fd-terms"
+          aria-label={t.termsLabel}
           className="fd-code"
           value={terms}
           onChange={(e) => setTerms(e.target.value)}
-          autoSize={{ minRows: 3, maxRows: 8 }}
+          rows={5}
           placeholder={'{\n  "en": ["term one", "term two"],\n  "zh_CN": ["关键词一", "关键词二"]\n}'}
         />
-        <span className="fd-hint" style={{ marginTop: 8 }}>{t.termsFormat}</span>
+        <div className="fd-hint-row">
+          <span className="fd-hint">{t.termsFormat}</span>
+          <RulesTip text={t.termsFormatTip} label={t.rulesLink} />
+        </div>
         {termsInfo && termsInfo.ok && termsInfo.dropped > 0 && (
           <span className="fd-hint warn" style={{ marginTop: 4 }}>{t.termsDropped(termsInfo.dropped)}</span>
         )}
-        <input ref={termsFileRef} type="file" accept=".json,.txt,application/json" style={{ display: 'none' }} onChange={onImportTerms} />
+        <input ref={termsFileRef} name="import-terms" aria-label={t.termsLabel} type="file" accept=".json,.txt,application/json" style={{ display: 'none' }} onChange={onImportTerms} />
         <Space size={4} style={{ marginTop: 12 }}>
           <Button variant="text" color="default" size="small" icon={<CodeOutlined />} onClick={onLoadSampleTerms}>{t.termsSample}</Button>
           <Button variant="text" color="default" size="small" icon={<UploadOutlined />} onClick={() => termsFileRef.current?.click()}>{t.importFile}</Button>
@@ -684,7 +863,7 @@ export default function App() {
       </Card>
 
       {/* 执行 */}
-      <Card className="rise" style={{ marginBottom: 16, animationDelay: '0.15s' }} styles={{ body: { padding: 22 } }}>
+      <Card id="fd-exec" tabIndex={-1} className="rise" style={{ marginBottom: 16, animationDelay: '0.15s' }} styles={{ body: { padding: 22 } }}>
         <div className="fd-eyebrow"><ThunderboltFilled style={{ color: 'var(--fd-cyan)' }} />{t.exec}</div>
         <div className="fd-run">
           <Checkbox.Group value={units} onChange={onUnitsChange} disabled={running}>
@@ -695,24 +874,52 @@ export default function App() {
                 return (
                   <span className="fd-unit" key={u.key}>
                     <Checkbox value={u.key} disabled={!ready}>
-                      <span style={{ color: ready ? 'var(--fd-ink)' : 'var(--fd-dim)' }}>{u.label}</span>
-                      {why && <span style={{ marginLeft: 5, fontSize: 11, color: 'var(--fd-dim)' }}>({why})</span>}
+                      <span style={{ color: ready ? 'var(--fd-ink)' : 'var(--fd-note)' }}>{u.label}</span>
+                      {/* 「为什么不能选」是给用户读的信息，不能停在装饰灰那一档（实测 3.32:1） */}
+                      {why && <span className="fd-unit-why">({why})</span>}
                     </Checkbox>
                   </span>
                 );
               })}
             </div>
           </Checkbox.Group>
-          <Tooltip title={loginNeedsUrl ? t.needUrlLogin : t.loginNote}>
-            <Button variant="outlined" icon={<LoginOutlined />} onClick={onLogin} disabled={running || !hasAnyUrl} style={{ marginLeft: 'auto' }}>{t.login}</Button>
-          </Tooltip>
-          <Button className="fd-start" color="primary" variant="solid" icon={<ThunderboltFilled />} onClick={onRun} loading={running} disabled={running || !canRun}>
-            {running ? t.runningBtn : t.run}
-          </Button>
-          <Button color="danger" variant="solid" icon={<StopOutlined />} onClick={onStop} disabled={!running}>{t.stop}</Button>
+          <span className="fd-actions">
+            <Tooltip title={loginNeedsUrl ? t.needUrlLogin : t.loginNote}>
+              <Button variant="outlined" icon={<LoginOutlined />} onClick={onLogin} disabled={running || !hasAnyUrl}>{t.login}</Button>
+            </Tooltip>
+            <Button className="fd-start" color="primary" variant="solid" icon={<ThunderboltFilled />} onClick={onRun} loading={running} disabled={running || !canRun}>
+              {running ? t.runningBtn : t.run}
+            </Button>
+            <Button color="danger" variant="solid" icon={<StopOutlined />} onClick={onStop} disabled={!running}>{t.stop}</Button>
+          </span>
         </div>
         {(!running && runReason) && <span className="fd-hint warn" style={{ marginTop: 14 }}>{runReason}</span>}
-        <span className="fd-hint" style={{ marginTop: 12 }}>{t.execNote}</span>
+        {/* 主键能点不等于会填你以为的那些：把「本次到底会填什么」摊在键下面 */}
+        {runRead.mode === 'idle' ? (
+          <span className="fd-hint" style={{ marginTop: 12 }}>{willFillText}</span>
+        ) : (
+          <div className={`fd-runline ${runRead.mode}`} role="status">
+            <span className="fd-runline-k">
+              {runRead.mode === 'result' ? t.runResult : t.runNow}{runTallyText ? `：${runTallyText}` : ''}
+            </span>
+            <span className="fd-pills">
+              {unitMeta.map((m) => {
+                const u = runRead.units.find((x) => x.key === m.key) || { i: 0, n: 0, filled: 0, human: 0, state: 'pending' };
+                const st = pickedUnits.has(m.key) ? u.state : 'unselected';
+                return (
+                  <span key={m.key} className={`fd-pill s-${st}`}>
+                    <span className="pk">{m.label}</span>
+                    <span className="pv">{pillText(st, u)}</span>
+                  </span>
+                );
+              })}
+            </span>
+          </div>
+        )}
+        <div className="fd-hint-row">
+          <span className="fd-hint">{t.execNote}</span>
+          <RulesTip text={t.execNoteTip} label={t.rulesLink} />
+        </div>
       </Card>
 
       {/* 日志 */}
@@ -720,20 +927,15 @@ export default function App() {
         <Flex align="center" justify="space-between" style={{ marginBottom: 12 }}>
           <div className="fd-eyebrow" style={{ margin: 0 }}><CheckCircleFilled style={{ color: 'var(--fd-good)' }} />{t.logsTitle}</div>
           <Space size={10} align="center">
-            <span className="mono" style={{ color: 'var(--fd-dim)', fontSize: 11 }}>{t.lines(logs.length)}</span>
+            <span className="mono fd-count">{t.lines(logs.length)}</span>
             <Button size="small" variant="text" color="default" icon={<CopyOutlined />} onClick={onCopyLogs} disabled={logs.length === 0}>{t.copyLogs}</Button>
           </Space>
         </Flex>
-        <div className="fd-log" ref={consoleRef}>
-          {logs.length === 0
-            ? <div className="fd-log-empty">{t.logsEmpty}</div>
-            : logs.map((l) => (
-              <div key={l.id} className={`ln ${l.cls}`}>
-                <span className="ts">{l.ts}</span>{l.msg}
-              </div>
-            ))}
+        {/* 可滚区域要能用键盘滚（WCAG 2.1.1）：以前 tabIndex=-1，Tab 根本落不上来 */}
+        <div className="fd-log" ref={consoleRef} tabIndex={0}>
+          {logs.length === 0 ? <div className="fd-log-empty">{t.logsEmpty}</div> : logRows}
         </div>
       </Card>
-    </div>
+    </main>
   );
 }

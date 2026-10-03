@@ -12,6 +12,9 @@
   --fd-ink: #E7EEF6;
   --fd-muted: #7E96B0;
   --fd-dim: #55708E;
+  /* 要读的正文（规则说明、语言码、计数）专用灰。--fd-dim 压在卡片合成底上只有 3.32:1，
+     写给用户看的句子不能停在那一档；--fd-dim 从此只留给纯装饰（分隔点、空态横杠）。 */
+  --fd-note: #93A9BF;
   --fd-line: #22344B;
   --fd-line-2: #182739;
   --fd-cyan: #37C6D6;
@@ -20,9 +23,11 @@
   --fd-amber: #F0A63C;
   --fd-coral: #F27059;
 
-  --fd-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, Menlo, monospace;
-  --fd-disp: 'Saira Semi Condensed', 'Bahnschrift', 'Roboto Condensed', system-ui, sans-serif;
-  --fd-body: 'Hanken Grotesk', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  /* 本地优先的三套字面：仪表感靠「压缩体 + 字距」而不是靠外网字体，
+     缺谁就退到谁，不再出现「离线时悄悄换一副面孔」。 */
+  --fd-mono: ui-monospace, 'Cascadia Mono', 'Cascadia Code', Consolas, Menlo, 'JetBrains Mono', monospace;
+  --fd-disp: 'Bahnschrift', 'DIN Alternate', 'Roboto Condensed', 'Segoe UI', system-ui, sans-serif;
+  --fd-body: 'Segoe UI', system-ui, -apple-system, Roboto, 'Helvetica Neue', 'Microsoft YaHei', sans-serif;
 }
 
 html, body, #root { height: 100%; margin: 0; }
@@ -56,8 +61,8 @@ body::before {
 .fd-label {
   font-family: var(--fd-disp);
   font-weight: 600;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+  letter-spacing: var(--ls-label);
+  text-transform: var(--caps);
   font-size: 12px;
   color: var(--fd-muted);
 }
@@ -85,7 +90,7 @@ body::before {
 .fd-word b { color: var(--fd-cyan); font-weight: 700; }
 .fd-sub {
   margin-top: 6px; font-family: var(--fd-disp); font-weight: 500;
-  letter-spacing: 0.14em; text-transform: uppercase; font-size: 11px; color: var(--fd-muted);
+  letter-spacing: var(--ls-mid); text-transform: var(--caps); font-size: 11px; color: var(--fd-muted);
 }
 .fd-sub .n { color: var(--fd-cyan); font-variant-numeric: tabular-nums; }
 .fd-headright { display: flex; align-items: center; gap: 12px; }
@@ -93,7 +98,7 @@ body::before {
 /* 状态遥测胶囊 */
 .fd-status {
   display: inline-flex; align-items: center; gap: 8px;
-  font-family: var(--fd-disp); font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; font-size: 11px;
+  font-family: var(--fd-disp); font-weight: 600; letter-spacing: var(--ls-mid); text-transform: var(--caps); font-size: 11px;
   padding: 7px 13px; border-radius: 999px; border: 1px solid var(--fd-line); background: rgba(9,16,26,0.7);
 }
 .fd-status.run { color: var(--fd-amber); border-color: rgba(240,166,60,0.4); }
@@ -112,14 +117,22 @@ body::before {
 /* ---------------- 卡片内小标题 ---------------- */
 .fd-eyebrow {
   display: flex; align-items: center; gap: 10px; margin-bottom: 15px;
-  font-family: var(--fd-disp); font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase; font-size: 11.5px; color: var(--fd-muted);
+  font-family: var(--fd-disp); font-weight: 600; letter-spacing: var(--ls-label); text-transform: var(--caps); font-size: 11.5px; color: var(--fd-muted);
 }
 .fd-eyebrow::before { content: ''; width: 16px; height: 2px; border-radius: 2px; background: var(--fd-cyan); flex: none; }
 .fd-eyebrow .n { margin-left: auto; color: var(--fd-cyan); font-variant-numeric: tabular-nums; letter-spacing: 0.06em; }
 .fd-eyebrow .n.muted { color: var(--fd-muted); }
 
-/* ---------------- 布局 ---------------- */
-.fd-shell { position: relative; z-index: 1; max-width: 1080px; margin: 0 auto; padding: 40px 22px 72px; }
+/* ---------------- 布局 ---------------- *//* 字距/全大写是拉丁排版手段，压在汉字上只会把词拆碎（实测中文标签被拉开 1.5~2.1px）。
+   默认零字距、不转大写；界面语言为英文时由 [data-lang] 打开这套排印。 */
+.fd-shell { --ls-label: 0em; --ls-mid: 0em; --ls-sm: 0em; --caps: none; position: relative; z-index: 1; max-width: 1080px; margin: 0 auto; padding: 40px 22px 72px; }
+.fd-shell[data-lang="en"] { --ls-label: 0.18em; --ls-mid: 0.13em; --ls-sm: 0.06em; --caps: uppercase; }
+/* 跳到操作区：平时藏起来，键盘 Tab 到才出现（主操作键以前排在第 47 站之后） */
+.fd-skip { position: absolute; left: 22px; top: 6px; z-index: 30; transform: translateY(-200%);
+  padding: 6px 12px; border-radius: 8px; background: var(--fd-panel); border: 1px solid var(--fd-cyan);
+  color: var(--fd-cyan); font-size: 12.5px; text-decoration: none; transition: transform .12s ease; }
+.fd-skip:focus { transform: none; }
+
 .fd-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
 @media (max-width: 900px) { .fd-cols { grid-template-columns: 1fr; } }
 
@@ -177,26 +190,42 @@ body::before {
 .fd-mfoot .k.ready { background: var(--fd-cyan); }
 .fd-mfoot .k.skip { border: 1.5px solid rgba(240,166,60,0.7); background: transparent; }
 .fd-mfoot .k.na { width: 11px; height: 2px; border-radius: 2px; background: #2B3F57; }
-.fd-matrix-empty { color: var(--fd-dim); font-style: italic; font-size: 13px; padding: 22px 4px; text-align: center; }
+/* 空态那句话是「下一步做什么」的指引，不是装饰：不斜体（汉字斜体是机器拉斜）、提到可读档 */
+.fd-matrix-empty { color: var(--fd-note); font-size: 13px; padding: 22px 4px; text-align: center; }
 
 /* ---------------- 签名：语言选择器（勾选生效 + 商店点） ---------------- */
 .fd-loc-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.fd-loc-head .n { font-family: var(--fd-disp); letter-spacing: 0.06em; color: var(--fd-cyan); font-variant-numeric: tabular-nums; font-size: 12px; }
+.fd-loc-head .n { font-family: var(--fd-disp); letter-spacing: var(--ls-sm); color: var(--fd-cyan); font-variant-numeric: tabular-nums; font-size: 12px; }
 .fd-loc-head .n.muted { color: var(--fd-amber); }
 .fd-loc-actions { display: inline-flex; gap: 2px; }
 /* 三点上方的 C/E/F 表头：dots 用 margin-left:auto 右对齐，与每行的 dots 右边缘对齐 */
-.fd-loc-cols { display: flex; padding: 0 8px 5px; }
+.fd-loc-cols { display: flex; align-items: center; padding: 0 8px 5px; }
 .fd-loc-cols .dots { margin-left: auto; display: inline-flex; gap: 8px; }
-.fd-loc-cols .lab { width: 13px; text-align: center; font-family: var(--fd-mono); font-size: 10px; color: var(--fd-dim); }
+.fd-loc-cols .lab { width: 13px; text-align: center; font-family: var(--fd-mono); font-size: 10.5px; color: var(--fd-note); }
+/* 图例：三档点样就地解释，省掉屏上那句 55 字说明书 */
+.fd-legend { display: inline-flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--fd-note); }
+.fd-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.fd-legend .k { display: inline-block; }
+.fd-legend .k.ready { width: 10px; height: 10px; border-radius: 50%; background: var(--fd-cyan); }
+.fd-legend .k.skip { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid rgba(240, 166, 60, 0.75); }
+.fd-legend .k.na { width: 10px; height: 2px; border-radius: 2px; background: #35506E; }
+.fd-loclist-wrap { position: relative; }
+/* 底部渐隐：只在真有藏行时挂上（列表框内滚，光有滚动条看不出下面还有内容） */
+.fd-loc-fade { position: absolute; left: 0; right: 9px; bottom: 0; height: 30px; pointer-events: none;
+  background: linear-gradient(180deg, rgba(19, 31, 48, 0), rgba(19, 31, 48, 0.96)); }
+.fd-loc-more { margin-top: 6px; padding: 0 8px; font-size: 11.5px; color: var(--fd-note); font-variant-numeric: tabular-nums; }
 .fd-loclist { display: flex; flex-direction: column; max-height: 430px; overflow: auto; margin: 0 -6px; padding: 2px 6px; }
 .fd-loc { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 8px; cursor: pointer; }
 .fd-loc:hover { background: rgba(55, 198, 214, 0.05); }
 .fd-loc .name { font-weight: 600; font-size: 13px; }
-.fd-loc .code { font-family: var(--fd-mono); font-size: 11px; color: var(--fd-dim); }
-.fd-loc .short { font-family: var(--fd-disp); font-size: 9.5px; letter-spacing: 0.06em; color: var(--fd-amber); border: 1px solid rgba(240, 166, 60, 0.35); border-radius: 4px; padding: 1px 5px; }
-.fd-loc .dots { margin-left: auto; display: inline-flex; gap: 8px; align-items: center; }
-.fd-loc.off { opacity: 0.5; }
-.fd-loc.off .name { color: var(--fd-muted); }
+.fd-loc .code { font-family: var(--fd-mono); font-size: 11px; color: var(--fd-note); }
+.fd-loc .short { font-family: var(--fd-disp); font-size: 9.5px; letter-spacing: var(--ls-sm); color: var(--fd-amber); border: 1px solid rgba(240, 166, 60, 0.35); border-radius: 4px; padding: 1px 5px; }
+/* 三点区只负责「说」，不负责被点：整行是 label，点这儿等于误改勾选 */
+.fd-loc .dots { margin-left: auto; display: inline-flex; gap: 8px; align-items: center; pointer-events: none; }
+/* 未选中不靠 opacity 稀释：整行压到 .5 会把母语名带到 2.38:1、语言码 1.77:1，
+   「全不选」一按等于把 24 行从屏上抹掉。选中与否由复选框本身表达。 */
+.fd-loc.off .name { color: #A9BCD0; font-weight: 500; }
+.fd-loc.off .code { color: #8FA6BC; }
 
 /* ---------------- 母语文字语言标签（payload 母题） ---------------- */
 .fd-scripts { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -209,7 +238,15 @@ body::before {
 /* ---------------- 执行区 ---------------- */
 .fd-run { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .fd-units { display: flex; gap: 8px; flex-wrap: wrap; }
-.fd-start.ant-btn { font-family: var(--fd-disp); letter-spacing: 0.12em; text-transform: uppercase; font-weight: 600; }
+.fd-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+/* 窄屏：单元复选自己成 2×2，三个键固定收在最后一段，主键不会被挤到中间 */
+@media (max-width: 700px) {
+  .fd-run { flex-direction: column; align-items: stretch; gap: 14px; }
+  .fd-units { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
+  .fd-actions { margin-left: 0; }
+  .fd-actions .fd-start { margin-left: auto; }
+}
+.fd-start.ant-btn { font-family: var(--fd-disp); letter-spacing: var(--ls-mid); text-transform: var(--caps); font-weight: 600; }
 
 /* ---------------- 日志（遥测） ---------------- */
 .fd-log {
@@ -217,21 +254,57 @@ body::before {
   height: 300px; overflow: auto; padding: 13px 15px;
   font-family: var(--fd-mono); font-size: 12.5px; line-height: 1.75;
 }
-.fd-log .ln { white-space: pre-wrap; color: #A6B8CC; }
-.fd-log .ln .ts { color: #506A87; margin-right: 10px; font-variant-numeric: tabular-nums; }
-.fd-log .ln.ok { color: var(--fd-good); }
-.fd-log .ln.warn { color: var(--fd-amber); }
-.fd-log .ln.err { color: var(--fd-coral); }
-.fd-log-empty { color: var(--fd-dim); font-style: italic; }
+.fd-log .ln { white-space: pre-wrap; color: #A6B8CC; border-left: 2px solid transparent; padding-left: 9px; margin-left: -9px; }
+.fd-log .ln .ts { color: var(--fd-note); margin-right: 10px; font-variant-numeric: tabular-nums; }
+/* 好/注意/出错不只靠字色分档：12.5px 的彩色小字在暗底上最先丢的就是色相差别，加一条左轴更稳 */
+.fd-log .ln.ok { color: var(--fd-good); border-left-color: var(--fd-good); }
+.fd-log .ln.warn { color: var(--fd-amber); border-left-color: var(--fd-amber); }
+.fd-log .ln.err { color: var(--fd-coral); border-left-color: var(--fd-coral); }
+.fd-log-empty { color: var(--fd-note); }
 
-/* 统一滚动条（座舱风） */
-.fd-log::-webkit-scrollbar, .ant-input::-webkit-scrollbar, textarea::-webkit-scrollbar { width: 9px; height: 9px; }
-.fd-log::-webkit-scrollbar-thumb, .ant-input::-webkit-scrollbar-thumb, textarea::-webkit-scrollbar-thumb { background: #223650; border-radius: 6px; }
-.fd-log::-webkit-scrollbar-track, textarea::-webkit-scrollbar-track { background: transparent; }
+/* 统一滚动条（座舱风）：语言列表以前漏在名单外，用的是系统亮色，在暗底上最抢眼 */
+.fd-log::-webkit-scrollbar, .fd-loclist::-webkit-scrollbar, .ant-input::-webkit-scrollbar, textarea::-webkit-scrollbar { width: 9px; height: 9px; }
+.fd-log::-webkit-scrollbar-thumb, .fd-loclist::-webkit-scrollbar-thumb, .ant-input::-webkit-scrollbar-thumb, textarea::-webkit-scrollbar-thumb { background: #223650; border-radius: 6px; }
+.fd-log::-webkit-scrollbar-track, .fd-loclist::-webkit-scrollbar-track, textarea::-webkit-scrollbar-track { background: transparent; }
 
-.fd-hint { display: block; font-size: 12px; line-height: 1.6; color: var(--fd-dim); }
+.fd-hint { display: block; font-size: 12px; line-height: 1.6; color: var(--fd-note); }
 .fd-hint.warn { color: var(--fd-amber); }
 .fd-hint.err { color: var(--fd-coral); }
+/* 链接摘要 / 保存时刻 / 单元为何不能选 / 日志行数：都是要读的信息，统一走可读档 */
+.fd-digest { display: block; font-family: var(--fd-mono); font-size: 11px; line-height: 1.5; color: var(--fd-note); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fd-saved { font-size: 12px; color: var(--fd-note); font-variant-numeric: tabular-nums; }
+.fd-unit-why { margin-left: 5px; font-size: 11.5px; color: var(--fd-note); }
+.fd-count { font-size: 11.5px; color: var(--fd-note); }
+/* 一句话 + 一个「看规则」：屏上只留行动指令，细节收进浮层（浮层里可以长） */
+.fd-hint-row { display: flex; align-items: flex-start; gap: 8px; margin-top: 8px; }
+.fd-hint-row > .fd-hint { flex: 1; margin-top: 0 !important; }
+.fd-rules.ant-btn { flex: none; height: 20px; padding-inline: 4px; font-size: 11.5px; color: var(--fd-note); }
+/* 首屏三步条 */
+.fd-steps { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+.fd-step { display: inline-flex; align-items: center; gap: 8px; padding: 7px 13px; border-radius: 999px;
+  border: 1px solid var(--fd-line); background: rgba(9, 16, 26, 0.6); font-size: 13px; color: var(--fd-muted); }
+.fd-step b { font-family: var(--fd-mono); font-size: 11.5px; font-weight: 500; color: var(--fd-note); }
+.fd-step.now { color: var(--fd-amber); border-color: rgba(240, 166, 60, 0.45); }
+.fd-step.now b { color: var(--fd-amber); }
+.fd-step.done { color: var(--fd-good); border-color: rgba(72, 208, 160, 0.35); }
+.fd-step.done::after { content: '✓'; color: var(--fd-good); }
+.fd-step em { font-style: normal; font-size: 11.5px; color: var(--fd-amber); }
+
+/* 运行读数 / 结果条（U4/U5）：跑起来时每个执行单元一格，跑完同一排格子原地变成结果。
+   没发生的档（未开始 / 没选）也用可读灰 --fd-note：这些字是给用户看的，不能停到装饰灰那一档。 */
+.fd-runline { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 12px; }
+.fd-runline-k { font-size: 12.5px; color: var(--fd-note); letter-spacing: var(--ls-sm); }
+.fd-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.fd-pill { display: inline-flex; align-items: baseline; gap: 6px; padding: 3px 9px; border-radius: 999px;
+  border: 1px solid var(--fd-line); background: rgba(9, 16, 26, 0.55); font-size: 12px; color: var(--fd-note); }
+.fd-pill .pv { font-family: var(--fd-mono); font-size: 11.5px; }
+.fd-pill.s-pending, .fd-pill.s-unselected { border-color: var(--fd-line-2); }
+.fd-pill.s-running { color: var(--fd-cyan); border-color: rgba(55, 198, 214, 0.4); }
+/* 跑完之后还停在「进行中」那一档的单元，不能再是运行色：它其实是中途断了 */
+.fd-runline.result .fd-pill.s-running { color: var(--fd-note); border-color: var(--fd-line-2); }
+.fd-pill.s-stored { color: var(--fd-good); border-color: rgba(72, 208, 160, 0.35); }
+.fd-pill.s-review { color: var(--fd-amber); border-color: rgba(240, 166, 60, 0.45); }
+.fd-pill.s-failed { color: var(--fd-coral); border-color: rgba(242, 112, 89, 0.45); }
 
 /* ================================================================
  * antd 默认观感覆盖：让底座组件读作“座舱”，而非开箱即用的 antd
@@ -249,6 +322,9 @@ body::before {
   box-shadow: inset 0 1px 3px rgba(0,0,0,0.35);
 }
 .fd-code.ant-input { line-height: 1.7; }
+/* 高度固定 + 可纵向拖拽：以前用 autoSize，每次按键都要重算一次隐藏节点的高度（强制回流），
+   实测一次输入 24ms；改成固定 rows + 用户自己拖，降到 14ms（同一台机器、同一构建对比）。 */
+.fd-code.ant-input { resize: vertical; min-height: 150px; }
 
 /* 复选（执行单元）做成“通道开关”观感 */
 .fd-unit .ant-checkbox + span { padding-inline: 6px; }
@@ -256,5 +332,24 @@ body::before {
 /* 段控（中/EN）紧凑 */
 .ant-segmented { border: 1px solid var(--fd-line-2); }
 
-/* 可聚焦元素统一可见焦点 */
-:focus-visible { outline: 2px solid var(--fd-cyan); outline-offset: 2px; }
+/* 文本态按钮（新建/重命名/清空/复制日志…）：以前跟着 antd 的次级灰走，实测 2.11:1，
+   读起来像禁用态。可用态给到近正文亮度，禁用态留给 antd 自己压暗。 */
+body .ant-btn-variant-text:not(:disabled) { color: #C6D6E6; }
+
+/* 报错标签：antd 从 colorError 派生的暗红底 + 红字实测 4.45:1，差一点点就白读。显式配色。
+   antd 的样式是运行时注入到 head 末尾的，同权重会盖掉这条（实测加 body 前缀仍输），故用 !important。 */
+body .ant-tag.ant-tag-filled.ant-tag-error { color: #FFCFC5 !important; background: rgba(242, 120, 96, 0.16) !important; border-color: rgba(242, 112, 89, 0.45) !important; }
+
+/* 实心危险键：全局 colorTextLightSolid 给的是压仪表青的深墨，压在珊瑚上只有 4.46:1，
+   差半档；危险键单独压到近黑的暖深，实测 ≈6:1。 */
+body .ant-btn.ant-btn-color-dangerous.ant-btn-variant-solid:not(:disabled) { color: #1A0A05; }
+
+/* 可聚焦元素统一可见焦点。必须比 antd 的 .ant-btn:focus-visible 更具体——它的样式是运行时
+   注入到 head 末尾的，同权重会盖掉我们这条（实测按钮环只有 1.83:1，几乎看不见）。
+   用 body 前缀而不是 .fd-shell，是因为弹窗/气泡挂在 body 层的 portal 里。 */
+body :is(a, .ant-btn, .ant-segmented-item, .ant-select-content, .ant-checkbox-input, input, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--fd-cyan); outline-offset: 2px;
+}
+/* 按钮这一条必须 !important：antd 的按钮焦点环是运行时注入的、权重更高，实测同权重写法
+   仍然输给它的 rgb(31,73,78)（与底色 1.83:1，键盘用户几乎看不见落在哪儿）。 */
+body .ant-btn.ant-btn:focus-visible { outline: 2px solid var(--fd-cyan) !important; outline-offset: 2px !important; }
