@@ -1,0 +1,163 @@
+<!doctype html>
+<!--
+  fillduck 的 GitHub Social preview（1200x600，GitHub 仓库封面的官方推荐尺寸）。
+
+  设计取自产品自己的界面，不另起一套视觉语言：
+  - 色板直接来自 gui/web/src 的实际 token（#061019 底 / #F0A63C 琥珀 / #48D0A0 绿 / #6FB1EE 蓝）
+  - 版式呼应控制台：左上品牌标、右侧"18 种语言"的结果态、下方三个商店目标
+
+  渲染：
+    node {SKILL_DIR}/render.mjs social-preview.html social-preview.png --colors 256
+
+  注意：GitHub 仓库的 Social preview 只能在 Settings 里手动上传，
+  gh CLI 无法设置。本文件是那张图的源，改这里再重渲染即可。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<style>
+  * { margin: 0; box-sizing: border-box; }
+
+  body {
+    position: relative;              /* 让 .foot 锚在卡片上，而不是视口 */
+    width: 1200px; height: 600px; overflow: hidden;
+    background: #061019;             /* 产品实际的底色 */
+    color: #E7EEF6;
+    font-family: system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei",
+                 "Noto Sans CJK SC", "Noto Sans SC", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    display: flex; flex-direction: column;
+    padding: 64px 76px 0;
+  }
+
+  /* 右上角一抹琥珀辉光，呼应界面里 Chrome/Edge/Firefox 三个目标卡的暖光 */
+  .glow {
+    position: absolute; top: -180px; right: -140px;
+    width: 620px; height: 620px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(240,166,60,0.22) 0%, rgba(240,166,60,0) 68%);
+    pointer-events: none;
+  }
+  /* 左下角一抹冷光，压住左下角，避免大片死黑 */
+  .glow2 {
+    position: absolute; bottom: -220px; left: -160px;
+    width: 560px; height: 560px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(111,177,238,0.14) 0%, rgba(111,177,238,0) 70%);
+    pointer-events: none;
+  }
+
+  .row { position: relative; display: flex; align-items: center; }
+
+  /* ── 品牌标：鸭头用纯几何画出来，与界面里的图标同一套线条感 ── */
+  .mark {
+    width: 60px; height: 60px; border-radius: 16px;
+    background: linear-gradient(150deg, #F0A63C 0%, #E8823C 100%);
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 8px 26px rgba(240,166,60,0.30);
+    flex: none;
+  }
+  .mark svg { width: 42px; height: 42px; display: block; }
+
+  .brand { margin-left: 18px; display: flex; flex-direction: column; }
+  .brand .name {
+    font-size: 30px; font-weight: 800; letter-spacing: -0.01em; color: #F4F8FC;
+    line-height: 1.1;
+  }
+  .brand .tag {
+    font-size: 15px; letter-spacing: 0.20em; text-transform: uppercase;
+    color: #7E96B0; margin-top: 4px; font-weight: 600;
+  }
+
+  /* ── 主标题 ── */
+  h1 {
+    margin-top: 52px;
+    font-size: 78px; line-height: 1.1; font-weight: 800; letter-spacing: -0.025em;
+    color: #FFFFFF; max-width: 1000px;
+  }
+  h1 .amber { color: #F0A63C; }
+
+  .sub {
+    margin-top: 22px;
+    font-size: 27px; line-height: 1.5; color: #A9BCD0; max-width: 880px;
+    font-weight: 400;
+  }
+  .sub b { color: #C6D6E6; font-weight: 600; }
+
+  /* ── 底部一行：三个商店目标 + 结果态 ── */
+  .foot {
+    position: relative;
+    margin-top: 46px; margin-bottom: 58px;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .store {
+    display: flex; align-items: center; gap: 9px;
+    padding: 11px 17px; border-radius: 10px;
+    background: rgba(255,255,255,0.045);
+    border: 1px solid rgba(255,255,255,0.09);
+    font-size: 19px; font-weight: 600; color: #C6D6E6;
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .dot.c { background: #F0A63C; }
+  .dot.e { background: #6FB1EE; }
+  .dot.f { background: #58C0AE; }
+
+  .divider { width: 1px; height: 26px; background: rgba(255,255,255,0.13); margin: 0 6px; }
+
+  .result {
+    display: flex; align-items: center; gap: 9px;
+    font-size: 19px; font-weight: 600; color: #48D0A0;
+  }
+  .result svg { width: 19px; height: 19px; flex: none; }
+
+  .local {
+    margin-left: auto;
+    font-size: 17px; color: #6B7F96; font-weight: 500;
+    white-space: nowrap;
+  }
+  .local b { color: #8FA6BC; font-weight: 600; }
+</style>
+</head>
+<body>
+  <div class="glow"></div>
+  <div class="glow2"></div>
+
+  <div class="row">
+    <div class="mark">
+      <!-- 鸭头侧影：圆头 + 长喙 + 眼。喙与头分色，避免 38px 下糊成一团。 -->
+      <svg viewBox="0 0 24 24" fill="none">
+        <path d="M17.8 4.2c2.6 0 4.5 2.1 4.5 4.8 0 3.5-2.6 6.2-6.2 6.2-.8 0-1.5-.1-2.2-.3l-4.6 2.6 1.1-3.7a5.7 5.7 0 0 1-1.9-4.8c0-2.7 2-4.8 4.6-4.8h4.7Z"
+              fill="#1A0A05"/>
+        <path d="M16.6 9.1 23 11c.2.4.3.8.3 1.2 0 .4-.1.8-.2 1.2l-6.6-1.4c.2-.6.3-1.2.1-1.9Z"
+              fill="#7A3D10"/>
+        <circle cx="13.1" cy="8.3" r="1.25" fill="#F0A63C"/>
+      </svg>
+    </div>
+    <div class="brand">
+      <div class="name">FillDuck 填鸭</div>
+      <div class="tag">Fill once · Ship 20 languages</div>
+    </div>
+  </div>
+
+  <h1>一份多语言文案，<br /><span class="amber">一次填满三个商店</span></h1>
+
+  <div class="sub">
+    驱动你<b>本机的真实浏览器</b>，逐语言填入 Chrome / Edge / Firefox 后台的描述与搜索词。
+    <br />只写草稿 —— <b>提交权始终在你手里</b>。
+  </div>
+
+  <div class="foot">
+    <div class="store"><span class="dot c"></span>Chrome</div>
+    <div class="store"><span class="dot e"></span>Edge</div>
+    <div class="store"><span class="dot f"></span>Firefox</div>
+    <div class="divider"></div>
+    <div class="result">
+      <svg viewBox="0 0 24 24" fill="none">
+        <path d="M20 6.5 9.6 17 4 11.6" stroke="#48D0A0" stroke-width="2.6"
+              stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      18 种语言校验通过
+    </div>
+
+    <div class="local"><b>MIT</b> · 365 开源计划 #013</div>
+  </div>
+</body>
+</html>
