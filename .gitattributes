@@ -6,6 +6,13 @@
 *.sh text eol=lf
 *.bat text eol=crlf
 
+# vite 的入口 HTML 会被原样搬进 dist（不像 JS/CSS 那样由打包器重新生成，
+# 行尾总是 LF）。于是入口 HTML 的行尾会一路传染给产物：Windows 检出拿到
+# CRLF，Linux 检出拿到 LF，同一份源码在两个平台构建出字节不同的 dist，
+# "重建产物必须等于提交版"这道门禁就只在其中一个平台成立。
+# 钉死成 LF，让构建结果与构建平台无关。
+gui/web/index.html text eol=lf
+
 # 构建产物不做行尾转换。gui/web/dist 是压缩后的 bundle，一旦被当文本转换，
 # Windows 检出会平白多出上百个 CR；更麻烦的是每次 npm run build 之后
 # git status 都显示 dist 被改，而 git diff 却是空的（git 归一化后无差异）——
