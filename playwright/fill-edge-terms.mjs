@@ -1,6 +1,7 @@
 // Edge 搜索词填充：与描述填充同级、独立一遍。每语言：开弹层 → 清空已有词 → 逐个加新词 → 保存草稿 → 重开读回核对。
 // 选择器全部结构化、与界面语言无关（见 selectors.mjs 的 edge.searchTerm）。复用语言探测与按钮匹配。
 import { SELECTORS } from '../src/selectors.mjs';
+import { explainError } from '../src/core.mjs';
 import { prepareEdge, recoverToList } from './fill-edge.mjs';
 
 // 打开某语言编辑弹层，等“搜索词”区出现。
@@ -128,7 +129,9 @@ export async function fillEdgeSearchTerms(page, data, log, shouldStop) {
       log(`Edge 搜索词 ${i + 1}/${pending.length}：${label} — ${text.length} 个`);
       let r;
       try { r = await fillTermsOne(page, st, ui, codeToAria[locale], text); }
-      catch (e) { r = 'error: ' + e.message.split('\n')[0]; await recoverToList(page, ui); }
+      // 抛异常时先翻成人话再记：原来直接 'error: ' + 原始消息，日志里会出现
+      // locator.click: Timeout 30000ms exceeded. 这种内部串（还可能夹着整段用户文案）。
+      catch (e) { r = explainError(e).text; await recoverToList(page, ui); }
       if (r === 'unchanged') log(`  ${locale} 搜索词已是最新`);
       else if (r === 'submitted') toVerify.push(pending[i]);
       else if (pass < 3) { nextPending.push(pending[i]); log(`  ⚠️ ${label} 没存成（${r}），下一轮再试`); }

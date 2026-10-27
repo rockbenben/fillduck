@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseInput, parseTerms, buildFillQueue, forceDashboardLang, matchLocaleButtons } from '../src/core.mjs';
+import { parseInput, parseTerms, buildFillQueue, forceDashboardLang, matchLocaleButtons, explainError } from '../src/core.mjs';
 
 test('parseInput: 合法对象', () => {
   const r = parseInput('{"en":"hello","ja":"こんにちは"}');
@@ -229,4 +229,34 @@ test('parseTerms: 容忍 UTF-8 BOM', () => {
   const r = parseTerms('﻿{"en":["pdf"]}');
   assert.equal(r.ok, true);
   assert.deepEqual(r.data.en, ['pdf']);
+});
+
+// 失败原因要翻成人话：原始 Playwright 串（内部选择器、超时毫秒数，甚至整段用户文案）
+// 用户看不懂，日志也会被撑爆。技术细节只留一行、去掉 ANSI。
+test('explainError: 定位失败先给人话，技术细节只留一行', () => {
+  const e1 = explainError(new Error('locator.waitFor: Timeout 30000ms exceeded.\nCall log:\n  - waiting for locator(\'form[action*="edit_describe"]\')'));
+  assert.match(e1.plain, /页面上没找到要操作的那个元素/);
+  assert.equal(e1.detail, 'locator.waitFor: Timeout 30000ms exceeded.');
+  assert.equal(e1.text, `${e1.plain}。技术细节：${e1.detail}`);
+
+  const e2 = explainError(new Error('page.goto: Timeout 30000ms exceeded.'));
+  assert.match(e2.plain, /后台页面没按预期响应/);
+
+  const e3 = explainError(new Error('net::ERR_CONNECTION_REFUSED at http://127.0.0.1:4600/'));
+  assert.match(e3.plain, /连不上后台页面/);
+
+  const e4 = explainError(new Error('Target page, context or browser has been closed'));
+  assert.match(e4.plain, /浏览器窗口被关掉了/);
+
+  const e5 = explainError(new Error('something odd happened'));
+  assert.match(e5.plain, /这一步没能完成/);
+});
+
+test('explainError: 去掉 ANSI 颜色码、截断超长细节、绝不带出用户原文', () => {
+  const raw = 'locator.pressSequentially: Timeout 30000ms exceeded.\nCall log:\n  - elementHandle.type("' + '用户原文'.repeat(200) + '")';
+  const e = explainError(new Error(`\u001b[2m${raw}\u001b[22m`));
+  assert.equal(e.detail.includes('\u001b'), false, '细节里不该有 ANSI 转义码');
+  assert.equal(e.detail.includes('用户原文'), false, '细节里不该带出用户原文');
+  assert.ok(e.detail.length <= 121, `细节太长：${e.detail.length}`);
+  assert.match(e.plain, /页面上没找到要操作的那个元素/);
 });

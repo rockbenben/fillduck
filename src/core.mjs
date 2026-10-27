@@ -111,6 +111,31 @@ export function forceDashboardLang(url, lang) {
   return u;
 }
 
+// 把自动化框架抛出的原始异常翻成人话。
+// 失败时用户能看到的只有这一句：不能把内部选择器、超时毫秒数、乃至整段用户原文
+// （Playwright 的 elementHandle.type("…") 会把正在输入的内容整段带出来）直接甩给用户。
+// plain = 给用户看的中文；detail = 给开发者看的一行技术细节（已去 ANSI、已截断）。
+export function explainError(e) {
+  const raw = String((e && e.message) || e || '').trim();
+  // eslint-disable-next-line no-control-regex -- ESC 是要剥掉的那个 ANSI 颜色码本身
+  const clean = raw.replace(/\x1b\[[0-9;]*m/g, ''); // 去掉 ANSI 颜色码（Playwright 的 Call log 带）
+  const first = clean.split('\n').map((s) => s.trim()).filter(Boolean)[0] || '';
+  const detail = first.length > 120 ? `${first.slice(0, 120)}…` : first;
+  let plain;
+  if (/locator\.(click|waitFor|fill|press|pressSequentially|type|selectOption|check|textContent|evaluate)/i.test(clean)) {
+    plain = '页面上没找到要操作的那个元素（后台可能改版了，或这一步没加载出来）';
+  } else if (/Timeout .*ms exceeded/i.test(clean)) {
+    plain = '后台页面没按预期响应（可能没登录、或页面卡住了）';
+  } else if (/net::ERR_|ECONNREFUSED|ENOTFOUND|ERR_CONNECTION/i.test(clean)) {
+    plain = '连不上后台页面（网络不通，或地址不对）';
+  } else if (/Target closed|has been closed|page closed/i.test(clean)) {
+    plain = '浏览器窗口被关掉了';
+  } else {
+    plain = '这一步没能完成';
+  }
+  return { plain, detail, text: detail ? `${plain}。技术细节：${detail}` : plain };
+}
+
 // 把 locale 码归一化：下划线/连字符等价，忽略大小写。
 // 这样用户的 _locales 风格键（zh_CN、pt_BR）能对上后台的连字符码（zh-CN、pt-BR）。
 export function canonLocale(s) {

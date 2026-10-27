@@ -6,10 +6,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { parseInput, parseTerms } from '../src/core.mjs';
+import { parseInput, parseTerms, explainError } from '../src/core.mjs';
 import {
   migrateIfNeeded, listProjects, getActive, setActive, activeAndList,
-  createProject, renameProject, deleteProject, projectPaths,
+  createProject, renameProject, deleteProject, projectPaths, projectSavedAt,
   readJsonSafe, readTextSafe,
 } from '../src/projects.mjs';
 import { launchPersistent } from '../playwright/browser.mjs';
@@ -38,11 +38,25 @@ const loginPages = new Map(); // 'chrome'|'edge'|'firefox' -> 本工具为该后
 let busy = false;
 let cancelRequested = false; // 停止标志：填充循环每项开始前检查
 const clients = new Set(); // SSE 连接
-const logBuffer = [];       // { seq, msg }
+const logBuffer = [];       // { seq, msg, ts }
 const SSE_EPOCH = randomUUID(); // 本次进程启动标识：写进事件 id 前缀，客户端据此识别“服务重启”并清屏重来。
 // 用 UUID 而非 Date.now()：两次启动落在同一毫秒会撞出相同 epoch，客户端认不出重启、maxSeq 不复位，
 // 新进程从 seq=1 起的日志全被当成“已见过”而丢弃、面板假死。UUID 每次进程必不同，杜绝这种碰撞。
 let logSeq = 0;              // 日志单调序号：客户端用 Last-Event-ID 只补拉断线期间漏掉的行，既不清屏也不重复
+
+// 时间戳由服务端给出：客户端原来用「收到这条消息的时刻」打戳，于是重放出来的历史日志
+// 全部盖着“打开页面的那一刻”——一屏日志看上去全发生在同一秒，看不出哪条先哪条后。
+function stamp() { return new Date().toTimeString().slice(0, 8); }
+// 写盘时间给界面看：今天只给时分秒，别的日子补上月日（光看 15:02:52 分不清是今天还是上周）。
+function fmtSavedAt(d) {
+  const now = new Date();
+  const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+  const hhmm = d.toTimeString().slice(0, 8);
+  if (sameDay) return hhmm;
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${mm}-${dd} ${hhmm}`;
+}
 
 // SSE 一帧：日志帧带 id（epoch.seq），状态帧不带（状态帧不能推进 Last-Event-ID，否则重连会漏发日志）。
 function sseFrame(obj, id) { return (id ? `id: ${id}\n` : '') + `data: ${JSON.stringify(obj)}\n\n`; }
@@ -52,12 +66,17 @@ function broadcast(obj, id) {
 }
 function log(msg) {
   const seq = ++logSeq;
-  logBuffer.push({ seq, msg });
+  const ts = stamp();
+  // 剥掉 ANSI 颜色码：Playwright 的异常里带一串不可见转义符，落到界面上会显示成字面的 "[2m"。
+  // eslint-disable-next-line no-control-regex -- ESC 是要剥掉的那个 ANSI 颜色码本身
+  const text = String(msg).replace(/\x1b\[[0-9;]*m/g, '');
+  logBuffer.push({ seq, msg: text, ts });
   if (logBuffer.length > 800) logBuffer.shift();
-  console.log(msg); // 同时打到黑窗口，方便排查
+  console.log(text); // 同时打到黑窗口，方便排查
   // epoch/seq 也放进 JSON：状态帧不带 id（不能推进 Last-Event-ID），客户端靠 JSON 里的 epoch 才能
   // 在“重启后首帧只是空缓冲的状态帧”时也及时清屏；seq 供客户端单调去重（Last-Event-ID 被抹掉时兜底）。
-  broadcast({ type: 'log', msg, epoch: SSE_EPOCH, seq }, `${SSE_EPOCH}.${seq}`);
+  // ts 带着真正发生的时刻：重放时客户端直接用它，不再拿“收到消息的时刻”冒充。
+  broadcast({ type: 'log', msg: text, ts, epoch: SSE_EPOCH, seq }, `${SSE_EPOCH}.${seq}`);
 }
 function setStatus(status) { broadcast({ type: 'status', status, epoch: SSE_EPOCH }); }
 
@@ -129,12 +148,12 @@ async function doLogin() {
     const opens = [];
     let firstOpen = true;
     const claimBlank = () => { const f = firstOpen; firstOpen = false; return f; };
-    if (cfg.chromeEditUrl) opens.push((await pageFor('chrome', claimBlank())).goto(cfg.chromeEditUrl).catch((e) => log('Chrome 打开失败：' + e.message)));
-    if (cfg.edgeListingsUrl) opens.push((await pageFor('edge', claimBlank())).goto(cfg.edgeListingsUrl).catch((e) => log('Edge 打开失败：' + e.message)));
-    if (cfg.firefoxEditUrl) opens.push((await pageFor('firefox', claimBlank())).goto(cfg.firefoxEditUrl).catch((e) => log('Firefox 打开失败：' + e.message)));
+    if (cfg.chromeEditUrl) opens.push((await pageFor('chrome', claimBlank())).goto(cfg.chromeEditUrl).catch((e) => log('Chrome 打开失败：' + explainError(e).text)));
+    if (cfg.edgeListingsUrl) opens.push((await pageFor('edge', claimBlank())).goto(cfg.edgeListingsUrl).catch((e) => log('Edge 打开失败：' + explainError(e).text)));
+    if (cfg.firefoxEditUrl) opens.push((await pageFor('firefox', claimBlank())).goto(cfg.firefoxEditUrl).catch((e) => log('Firefox 打开失败：' + explainError(e).text)));
     await Promise.all(opens);
   } catch (e) {
-    log('❌ 登录启动失败：' + e.message);
+    log('❌ 登录启动失败：' + explainError(e).text);
   }
 }
 
@@ -195,7 +214,9 @@ async function doRun(input) {
     // 每个目标独立 try/catch：选「全部」时 Chrome 抛错不应让 Edge/Firefox 直接不跑。
     const runTarget = async (name, fn) => {
       try { await fn(); ran++; return true; }
-      catch (e) { targetErrors.push(name); log(`❌ ${name} 出错：${e.message}（继续跑其余目标）`); return false; }
+      // 失败原因先给人话，原始异常只留一行技术细节：把 Playwright 原文（内部选择器、
+      // 超时毫秒数，甚至整段用户文案）直接甩出去，用户既看不懂、日志也会被撑爆。
+      catch (e) { targetErrors.push(name); log(`❌ ${name} 出错：${explainError(e).text}（继续跑其余目标）`); return false; }
     };
     if (!cancelRequested && want('chrome-desc')) {
       if (!cfg.chromeEditUrl) log('没填 Chrome 链接，跳过。');
@@ -249,7 +270,7 @@ async function doRun(input) {
     else if (targetErrors.length) log(`⚠️ 完成，但这些目标出错需重跑：${targetErrors.join('、')}（浏览器保留现场）`);
     else log('✅ 完成。请在浏览器里人工检查后提交。');
   } catch (e) {
-    log('❌ 出错：' + e.message + '（浏览器保留现场，修好后重跑）');
+    log('❌ 出错：' + explainError(e).text + '（浏览器保留现场，修好后重跑）');
   } finally {
     busy = false; cancelRequested = false; setStatus('idle');
   }
@@ -281,11 +302,13 @@ const server = http.createServer(async (req, res) => {
         const { name, list } = await activeAndList(ROOT);
         const paths = projectPaths(ROOT, name);
         const cfg = (await readJsonSafe(paths.config)) || {};
+        const saved = await projectSavedAt(ROOT, name);
         return {
           projects: list, active: name,
           chromeEditUrl: cfg.chromeEditUrl || '', edgeListingsUrl: cfg.edgeListingsUrl || '',
           firefoxEditUrl: cfg.firefoxEditUrl || '',
           copy: await readTextSafe(paths.descriptions), terms: await readTextSafe(paths.terms),
+          savedAt: saved ? fmtSavedAt(saved) : '',
         };
       });
       sendJson(res, { ...snap, busy });
@@ -307,8 +330,12 @@ const server = http.createServer(async (req, res) => {
         }, null, 2));
         await writeFile(paths.descriptions, body.copy || '');
         await writeFile(paths.terms, body.terms || '');
-        log('已保存链接、描述与搜索词。');
-        return { ok: true };
+        // 自动保存不往运行日志里写：改一个字就落一次盘、就多一行「已保存」，
+        // 几轮下来运行日志里全是同一句话，真正的填充进度反而被埋掉。
+        // 只有用户亲手按「立即写盘」才留一行，界面上另有「已保存 · 时间」随时可看。
+        if (body.manual) log('已保存链接、描述与搜索词。');
+        const saved = await projectSavedAt(ROOT, name);
+        return { ok: true, savedAt: saved ? fmtSavedAt(saved) : '' };
       });
       sendJson(res, r); return;
     }
@@ -369,7 +396,7 @@ const server = http.createServer(async (req, res) => {
       const [lastEpoch, lastSeqRaw] = String(req.headers['last-event-id'] || '').split('.');
       const fromSeq = lastEpoch === String(SSE_EPOCH) ? (Number(lastSeqRaw) || 0) : 0;
       let replay = 'retry: 2000\n\n';
-      for (const m of logBuffer) if (m.seq > fromSeq) replay += sseFrame({ type: 'log', msg: m.msg, epoch: SSE_EPOCH, seq: m.seq }, `${SSE_EPOCH}.${m.seq}`);
+      for (const m of logBuffer) if (m.seq > fromSeq) replay += sseFrame({ type: 'log', msg: m.msg, ts: m.ts, epoch: SSE_EPOCH, seq: m.seq }, `${SSE_EPOCH}.${m.seq}`);
       replay += `data: ${JSON.stringify({ type: 'status', status: busy ? 'running' : 'idle', epoch: SSE_EPOCH })}\n\n`;
       res.write(replay);
       clients.add(res);

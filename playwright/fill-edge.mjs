@@ -5,7 +5,7 @@
 // 把核对推迟到本轮全部保存之后，前面语言的落库时间被后面语言的填写自然覆盖，
 // 既不用原地干等，也避免误报后白白重填重存。
 import { SELECTORS } from '../src/selectors.mjs';
-import { buildFillQueue, forceDashboardLang, canonLocale, matchLocaleButtons } from '../src/core.mjs';
+import { buildFillQueue, forceDashboardLang, canonLocale, matchLocaleButtons, explainError } from '../src/core.mjs';
 
 // 全选快捷键：macOS 是 Cmd+A（Control+A 在 mac 的输入框里是移动光标，清不掉旧文案）
 const SELECT_ALL = process.platform === 'darwin' ? 'Meta+A' : 'Control+A';
@@ -179,7 +179,8 @@ export async function prepareEdge(page, data, log, { label, warnUnknown }) {
   // 首次给 60s（登录跳转后列表渲染可能很慢）；重载后已是热页面，20s 足够。
   let lang = await detectEdgeLang(page, cfg.editButtonRoleName, 60000);
   if (!lang) {
-    log('Edge 界面非中/英，强制英文重载…');
+    // 同 Chrome：没登录 Microsoft 时也会落到这里，「界面非中/英」是把人引向错误方向。
+    log('没找到 Edge 后台界面（可能没登录 Microsoft、界面不是中英、或链接不对），先用英文界面重载再试…');
     await page.goto(forceDashboardLang(page.url(), 'en'), { waitUntil: 'load' }).catch(() => {});
     lang = await detectEdgeLang(page, cfg.editButtonRoleName, 20000);
   }
@@ -241,7 +242,7 @@ export async function fillEdge(page, data, log, shouldStop) {
       log(`Edge 保存 ${i + 1}/${pending.length}：${label}`);
       let r;
       try { r = await fillAndSaveOne(page, cfg, ui, codeToAria[locale], text); }
-      catch (e) { r = 'error: ' + e.message.split('\n')[0]; await recoverToList(page, ui); }
+      catch (e) { r = explainError(e).text; await recoverToList(page, ui); }
       if (r === 'unchanged') log(`  ${locale} 内容已是最新，无需保存`);
       else if (r === 'submitted') toVerify.push(pending[i]);
       else if (pass < 3) { nextPending.push(pending[i]); log(`  ⚠️ ${label} 没保存成（${r}），下一轮再试`); }
@@ -294,7 +295,7 @@ export async function fillEdge(page, data, log, shouldStop) {
         }
       }
     } catch (e) {
-      log(`Edge 收尾核对未能完成（${e.message.split('\n')[0]}），按上一轮结果汇报`);
+      log(`Edge 收尾核对未能完成（${explainError(e).text}），按上一轮结果汇报`);
     }
   }
 

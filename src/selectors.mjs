@@ -9,6 +9,9 @@ export const SELECTORS = {
     languageListboxAriaLabel: { zh: '语言', en: 'Language' },
     // 描述框：页面唯一 textarea（maxlength=16000，light DOM）。界面语言无关。
     descriptionField: 'textarea[maxlength="16000"]',
+    // 描述长度上限（=上面那个 maxlength）。超过就填不进去，还会拖慢逐字回退直到整轮超时，
+    // 所以在开填之前先挑出来、像 AMO 那样单独报一句跳过，而不是填到一半才炸。
+    descriptionMax: 16000,
     // 顶部“保存草稿”按钮（2026-06-11 中文真机确认）。Chrome 后台不自动保存，填完必须点它，否则描述不落库。
     // 旁边还有“提请审核”按钮——本工具只存草稿，绝不点它。
     saveButtonText: { zh: '保存草稿', en: 'Save draft' },

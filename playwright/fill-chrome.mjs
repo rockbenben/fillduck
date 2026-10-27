@@ -1,7 +1,7 @@
 // Chrome 填充：自动识别后台界面语言(中/英) -> 下拉选语言 -> 在唯一 textarea 里 fill() 直接填入 -> 下一个。
 // 全部语言填完后点一次顶部“保存草稿”（Chrome 不自动保存，不点则描述不落库）。其它语言界面会强制成英文重载兜底。
 import { SELECTORS } from '../src/selectors.mjs';
-import { buildFillQueue, forceDashboardLang } from '../src/core.mjs';
+import { buildFillQueue, forceDashboardLang, explainError } from '../src/core.mjs';
 
 // 全选快捷键：macOS 是 Cmd+A（Control+A 在 mac 的输入框里是移动光标，清不掉旧文案）
 const SELECT_ALL = process.platform === 'darwin' ? 'Meta+A' : 'Control+A';
@@ -27,7 +27,9 @@ export async function fillChrome(page, data, log, shouldStop) {
   // 首次给 30s（登录跳转后首屏渲染可能较慢）；重载后已是热页面，15s 足够。
   let det = await detectChromeLang(page, labels, 30000);
   if (!det) {
-    log('Chrome 界面非中/英，强制英文重载…');
+    // 不要一口咬定「界面非中/英」：没登录 Google 时页面会跳到登录页，下拉框同样找不到，
+    // 那时这句话会把人引到完全错误的方向（去改账号语言）。只说事实 + 可能原因。
+    log('没找到 Chrome 后台界面（可能没登录 Google、界面不是中英、或链接不对），先用英文界面重载再试…');
     await page.goto(forceDashboardLang(page.url(), 'en'), { waitUntil: 'load' }).catch(() => {});
     det = await detectChromeLang(page, labels, 15000);
   }
@@ -48,16 +50,33 @@ export async function fillChrome(page, data, log, shouldStop) {
   if (missing.length) log(`Chrome 缺文案，跳过：${missing.join(', ')}`);
   if (duplicates.length) log(`⚠️ 文案里这些键与前面的键指向同一语言、已忽略：${duplicates.join(', ')}`);
 
+  // 超过描述框上限（maxlength）的语言先挑出来单独报一句跳过 —— 与 AMO 的 15000 字上限同一处置。
+  // 不先挑出来的话：填进去的值留不住 → 回退逐字输入 → 16000 字打不完 → 30s 超时 → 整轮 Chrome 中断，
+  // 前面十几种明明已经存好，却整体报「出错需重跑」。
+  const tooLong = queue.filter((q) => q.text.length > cfg.descriptionMax);
+  for (const q of tooLong) log(`Chrome 跳过 ${q.locale}：超过 ${cfg.descriptionMax} 字符上限`);
+  const fillable = queue.filter((q) => q.text.length <= cfg.descriptionMax);
+  if (tooLong.length) log(`Chrome：可填 ${fillable.length} 种（另有 ${tooLong.length} 种超长已跳过）`);
+  // 一种都填不了就别往下走：否则会空跑一趟、再点一次没必要的「保存草稿」，
+  // 最后报「Chrome 完成：已填 0 种…请人工检查后提交」——既没填也没存，却报成功。
+  // AMO 那条路径本来就有这句「没有可填的语言」，Chrome 这里补齐同一处置。
+  if (!fillable.length) {
+    log(tooLong.length
+      ? `Chrome：没有可填的语言——全都超过了 ${cfg.descriptionMax} 字符上限。`
+      : 'Chrome：没有可填的语言。');
+    return;
+  }
+
   let filled = 0;   // 实际填到的语言数（停止时用于保存与汇报）
   let stopped = false;
   let loopError = null; // 中途异常也必须先落到“保存草稿”块（同停止路径），否则已填的全丢
   const unstable = []; // 三次尝试后值仍未留住的语言，结尾集中汇报，避免淹没在滚动日志里
   try {
-    for (let i = 0; i < queue.length; i++) {
+    for (let i = 0; i < fillable.length; i++) {
       // 停止时不能直接 return：Chrome 不自动保存，必须落到下面的“保存草稿”块，否则已填的全丢。
       if (shouldStop && shouldStop()) { log('⏹ 已停止（Chrome），正在保存已填的部分…'); stopped = true; break; }
-      const { locale, text } = queue[i];
-      log(`Chrome ${i + 1}/${queue.length}：${locale}`);
+      const { locale, text } = fillable[i];
+      log(`Chrome ${i + 1}/${fillable.length}：${locale}`);
       // 打开语言下拉（文字含“语言/Language”的那个 combobox），点对应选项
       await page.locator('[role="combobox"]', { hasText: listboxLabel }).first().click();
       await page.locator(`li[role="option"][data-value="${locale}"]`).click();
@@ -85,7 +104,9 @@ export async function fillChrome(page, data, log, shouldStop) {
     }
   } catch (e) {
     loopError = e;
-    log(`⚠️ Chrome 在第 ${filled + 1} 种语言时中断（${e.message.split('\n')[0]}），先把已填的 ${filled} 种保存成草稿…`);
+    // 中断原因先给人话：原始 Playwright 串（locator.pressSequentially: Timeout …、
+    // 甚至整段正在输入的用户文案）用户看不懂，日志也会被撑爆。
+    log(`⚠️ Chrome 在第 ${filled + 1} 种语言时中断（${explainError(e).text}），先把已填的 ${filled} 种保存成草稿…`);
     // 异常常发生在语言下拉展开后（选项点击超时），残留的下拉遮罩会拦截“保存草稿”的点击——先 Esc 关掉。
     await page.keyboard.press('Escape').catch(() => {});
   }
@@ -107,7 +128,7 @@ export async function fillChrome(page, data, log, shouldStop) {
     let saveClicked = false;
     await save.first().click({ timeout: loopError ? 10000 : 30000 }).then(
       () => { saveClicked = true; },
-      (e) => log(`⚠️ Chrome 点“保存草稿”失败：${e.message.split('\n')[0]}`),
+      (e) => log(`⚠️ Chrome 点“保存草稿”失败：${explainError(e).text}`),
     );
     if (saveClicked) {
       // 等保存生效：按钮变灰（无未保存改动）即认为已存；最多 ~10s 兜底等待。

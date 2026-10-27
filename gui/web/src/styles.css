@@ -182,6 +182,9 @@ body::before {
 .fd-cell i { display: block; }
 .fd-cell.ready i { width: 12px; height: 12px; border-radius: 50%; background: var(--fd-cyan); box-shadow: 0 0 0 3px rgba(55,198,214,0.13); }
 .fd-cell.skip i { width: 13px; height: 13px; border-radius: 50%; border: 1.5px solid rgba(240,166,60,0.7); }
+/* 太长：环上再压一道横杠（与「太短」的空心环一眼分得开） */
+.fd-cell.toolong i { width: 13px; height: 13px; border-radius: 50%; border: 1.5px solid rgba(240,166,60,0.7); position: relative; }
+.fd-cell.toolong i::after { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 1.5px; background: rgba(240,166,60,0.95); transform: translateY(-50%); }
 .fd-cell.na i { width: 11px; height: 2px; border-radius: 2px; background: #2B3F57; }
 
 .fd-mfoot { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 14px; font-size: 11px; color: var(--fd-muted); }
@@ -208,6 +211,8 @@ body::before {
 .fd-legend .k { display: inline-block; }
 .fd-legend .k.ready { width: 10px; height: 10px; border-radius: 50%; background: var(--fd-cyan); }
 .fd-legend .k.skip { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid rgba(240, 166, 60, 0.75); }
+.fd-legend .k.toolong { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid rgba(240, 166, 60, 0.75); position: relative; }
+.fd-legend .k.toolong::after { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 1.5px; background: rgba(240, 166, 60, 0.95); transform: translateY(-50%); }
 .fd-legend .k.na { width: 10px; height: 2px; border-radius: 2px; background: #35506E; }
 .fd-loclist-wrap { position: relative; }
 /* 底部渐隐：只在真有藏行时挂上（列表框内滚，光有滚动条看不出下面还有内容） */

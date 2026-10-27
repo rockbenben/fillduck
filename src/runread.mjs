@@ -17,7 +17,9 @@ export const FAIL_NAME_TO_UNIT = {
 };
 
 // 状态档位，数字越大越"最终"：同一单元同时出现两种行时取靠后的那一档。
-export const STATE_RANK = { pending: 0, skipped: 1, running: 2, stored: 3, review: 4, failed: 5 };
+// skipped 要排在 running 之后：「打开 X 后台…」先记了 running，随后才判定「一种都填不了」，
+// skipped 才是这一项的最终结论。排错了会让结果条停在「准备中」，像是一直在跑。
+export const STATE_RANK = { pending: 0, running: 1, skipped: 2, stored: 3, review: 4, failed: 5 };
 
 const E = (kind, re, get = () => ({})) => ({ kind, re, get });
 const countList = (s) => s.split(',').map((x) => x.trim()).filter(Boolean).length;
@@ -33,7 +35,7 @@ export const UNIT_EVENTS = {
     E('review', /^⚠️ Chrome 已填 (\d+) 种但“保存草稿”没点上/, (m) => ({ filled: +m[1], human: +m[1] })),
     E('review', /^⚠️ Chrome 已填 (\d+) 种，但没找到“保存草稿”按钮/, (m) => ({ filled: +m[1], human: +m[1] })),
     E('review', /^⚠️ Chrome 这些语言填进去了但没稳住，请逐个检查：(.+)$/, (m) => ({ human: countList(m[1]) })),
-    E('skipped', /^(没填 Chrome 链接，跳过。|Chrome 无描述可填，跳过。)$/),
+    E('skipped', /^(没填 Chrome 链接，跳过。|Chrome 无描述可填，跳过。|Chrome：没有可填的语言。|Chrome：没有可填的语言——全都超过了 \d+ 字符上限。)$/),
   ],
   'edge-desc': [
     E('running', /^打开 Edge 后台…$|^重开 Edge 后台（清理上一步残留）…$/),
@@ -66,9 +68,14 @@ export const RUN_DONE = [
   /^❌ 全部目标都出错，本次没有填充任何内容：(.+?)（浏览器保留现场）$/,
   /^⏹ 已停止（已填的部分保留）。$/,
   /^⚠️ 没有可填充的目标：/,
+  // 这两句是 doRun 提前返回时说的（连 if/else 收尾链都没走到），漏认就会永远停在「进行中」。
+  /^⚠️ 没有选中任何执行目标。$/,
+  /^⚠️ 没有可填的内容：/,
   /^❌ 出错：(.+?)（浏览器保留现场，修好后重跑）$/,
 ];
-const RUN_START = /^收到填充请求：/;
+// 捕获组直接把「这一轮点了哪些项」取出来：原来靠 source.length 切片切，
+// 会连正则里的 ^ 一起算进长度，把第一项的名字切掉一个字（只剩 edge-desc）。
+const RUN_START = /^收到填充请求：(.*)$/;
 
 // Edge / Firefox 的「完成但有几条要人看」写在同一行收尾语里，得单独认。
 export const TAIL_REVIEW = {
@@ -91,9 +98,18 @@ const settle = (r, state, patch) => {
 // msgs = 日志原文数组（中文，未经界面语言翻译）
 export function readRun(msgs) {
   // 只看最后一次「收到填充请求」之后：日志跨轮累积，不能拿上一轮的收尾当本轮结果。
-  let from = 0;
-  for (let i = 0; i < msgs.length; i++) if (RUN_START.test(msgs[i])) from = i + 1;
-  const lines = msgs.slice(from);
+  // 一次都没请求过 ⇒ 这一轮还没开始：此时日志里只有「已保存」「已切换项目」这类杂音，
+  // 若把它们当运行中，界面会在用户点「开始填充」之前就显示「进行中」，并把「本次会填」那句
+  // 预览挤掉——用户以为已经在跑，白等一场。
+  let from = -1;
+  let picked = []; // 这一轮实际点了哪些项：请求那行写明了名字，比事后从界面状态反推可靠
+  for (let i = 0; i < msgs.length; i++) {
+    const m = RUN_START.exec(msgs[i]);
+    if (!m) continue;
+    from = i + 1;
+    picked = m[1].split(/\s*\+\s*/).map((k) => k.trim()).filter((k) => UNIT_KEYS.includes(k));
+  }
+  const lines = from < 0 ? [] : msgs.slice(from);
 
   const readings = {};
   for (const k of UNIT_KEYS) readings[k] = empty(k);
@@ -114,7 +130,7 @@ export function readRun(msgs) {
 
   const ended = RUN_DONE.some((re) => lines.some((l) => re.test(l)));
   const mode = !lines.length ? 'idle' : ended ? 'result' : 'running';
-  return { mode, units: UNIT_KEYS.map((k) => readings[k]) };
+  return { mode, units: UNIT_KEYS.map((k) => readings[k]), picked };
 }
 
 // 结果条开头那句：只数真发生了的档位。

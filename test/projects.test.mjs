@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   validateName, migrateIfNeeded, listProjects, getActive, setActive,
-  createProject, renameProject, deleteProject, projectPaths,
+  createProject, renameProject, deleteProject, projectPaths, projectSavedAt,
 } from '../src/projects.mjs';
 
 let root;
@@ -121,4 +121,22 @@ test('getActive: 指向不存在的项目时回退第一个并修复根 config',
   await writeFile(path.join(root, 'config.json'), JSON.stringify({ activeProject: '没了' }));
   assert.equal(await getActive(root), 'b'); // 按名排序第一个
   assert.deepEqual(JSON.parse(await readFile(path.join(root, 'config.json'), 'utf8')), { activeProject: 'b' });
+});
+
+// 界面要靠它回答「我的文案还在盘上吗、最后写于何时」：不能靠本次会话有没有存过来说事
+// （重新打开控制台就说「还没保存过」是在骗人）。
+test('projectSavedAt: 给出盘上最后一次写入的时刻；空项目给 null', async () => {
+  await migrateIfNeeded(root);
+  await createProject(root, '空的'); // 一个文件都还没有的项目
+  assert.equal(await projectSavedAt(root, '空的'), null);
+  const p = projectPaths(root, 'default');
+  await writeFile(p.descriptions, '{"en":"hi"}');
+  const t1 = await projectSavedAt(root, 'default');
+  assert.ok(t1 instanceof Date);
+  assert.ok(Math.abs(Date.now() - t1.getTime()) < 60_000, '时间应接近当下');
+  // 三个文件里取最新的那个
+  await new Promise((r) => setTimeout(r, 1100)); // 等文件系统把 mtime 推进
+  await writeFile(p.terms, '{"en":["a"]}');
+  const t2 = await projectSavedAt(root, 'default');
+  assert.ok(t2.getTime() >= t1.getTime(), '应取三个文件里最新的写入时刻');
 });

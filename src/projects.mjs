@@ -102,6 +102,17 @@ export async function getActive(root) {
   return (await activeAndList(root)).name;
 }
 
+// 项目里三个文件里最新的写入时间（Date）。界面用它显示「数据在盘上、最后写于何时」——
+// 不给的话，界面只能靠本次会话有没有存过来说事，重新打开就显示「还没保存过」，是在骗人。
+export async function projectSavedAt(root, name) {
+  const p = projectPaths(root, name);
+  let max = 0;
+  for (const f of [p.config, p.descriptions, p.terms]) {
+    try { const st = await stat(f); if (st.mtimeMs > max) max = st.mtimeMs; } catch { /* 这个文件还没有 */ }
+  }
+  return max ? new Date(max) : null;
+}
+
 // 重名判定不分大小写：Windows/macOS 文件系统不分大小写，mkdir('Test') 会静默合并进
 // 已有的 test 目录——createProject 报成功但目录没创建，setActive 随之失效回退，
 // 用户以为在新项目里、实际写进别的项目（数据覆盖）。

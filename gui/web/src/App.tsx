@@ -13,6 +13,7 @@ import { parseInput, parseTerms } from '../../../src/core.mjs'; // 复用后端�
 import { translateLog, logLevelOf } from '../../../src/logmap.mjs'; // 运行日志的双语显示层（与日志源头同一份表）
 import { readRun, tally } from '../../../src/runread.mjs'; // 从日志原文读「每项跑到哪 / 这轮结果」
 import { ALL_UNITS, STORE_TO_UNITS } from '../../../src/units.mjs'; // 执行单元定义与后端共用一份，防漂移
+import { SELECTORS } from '../../../src/selectors.mjs'; // 各后台的描述长度上下限（与填充器同一份）
 import LocaleSelect from './LocaleSelect.tsx';
 import type { LocaleItem, LocaleStore } from './LocaleSelect.tsx';
 
@@ -20,9 +21,9 @@ type Lang = 'zh' | 'en';
 type LogLine = { id: number; ts: string; msg: string; cls: string };
 type ProjModal = { mode: 'create' | 'rename'; value: string } | null;
 type SseMsg =
-  | { type: 'log'; msg: string; epoch?: string; seq?: number }
+  | { type: 'log'; msg: string; ts?: string; epoch?: string; seq?: number }
   | { type: 'status'; status: string; epoch?: string };
-type SaveResult = { ok: boolean; error?: string };
+type SaveResult = { ok: boolean; error?: string; savedAt?: string };
 
 // 界面文案（中/英）。运行日志由服务端产出（中文），显示层按界面语言翻译，见 src/logmap.mjs。
 const STR = {
@@ -69,10 +70,14 @@ const STR = {
     run: '开始填充', runningBtn: '填充中…', stop: '停止', exec: '执行',
     unitChromeDesc: 'Chrome 描述', unitEdgeDesc: 'Edge 描述', unitEdgeTerms: 'Edge 搜索词', unitFirefoxDesc: 'Firefox 描述',
     needUnit: '还差一步：勾上要填的内容', needSetup: '还差一步：填后台链接',
+    needCopy: '还差一步：贴多语言文案',
+    needJsonFix: '还差一步：先修好描述的 JSON 格式',
     unitNoUrl: '还没填链接', unitNoContent: '还没有这一项的内容',
     needLocale: '还差一步：至少勾一种语言',
     execNote: '会打开真浏览器一项项填，填完不关窗口 —— 检查过再由你提交。',
     execNoteTip: 'Edge 描述每种需 ≥250 字；Firefox(AMO) 描述每种上限 15000 字、保存即生效；Chrome / Edge 只写草稿。',
+    // 勾了 Firefox 才说：AMO 是唯一一个「存了就生效、不能撤回」的后台。
+    amoLiveWarn: 'Firefox(AMO) 的描述保存后【立刻生效】—— 商店页面上的描述当场就换成新文案，提交审核是另一回事。',
     allUnits: (n: number) => `全部 ${n} 项`,
     willFill: (items: string, n: number) => `本次会填：${items}（${n} 种语言）`,
     willFillNone: '本次会填：还没有可填项（每项不能选的原因见上面）',
@@ -93,10 +98,10 @@ const STR = {
     termsDropped: (n: number) => `已去掉 ${n} 个不合规则的词（太多 / 太长）。`,
     termsSample: '填入样例', termsSampleLoaded: '已填入搜索词样例', termsSampleBusy: '搜索词框已有内容；清空后再填样例。',
     termsImported: '已从文件导入搜索词', termsClearConfirm: '清空这份搜索词？清完可以从文件重新导入。',
-    localesTitle: '语言 · 勾选生效', mShort: '<250',
+    localesTitle: '语言 · 勾选生效', mShort: '<250', mLong: '太长',
     effOn: (n: number, m: number) => `${n} / ${m} 生效`, selAll: '全选', selNone: '全不选',
     localeEmpty: '填好上面的文案后，这里可勾选哪些语言本次生效（默认全选）。',
-    legendReady: '会写入', legendSkip: '太短，跳过', legendNa: '该商店未选',
+    legendReady: '会写入', legendSkip: '太短，跳过', legendLong: '太长，跳过', legendNa: '该商店未选',
     locHidden: (n: number, m: number) => `这里显示 ${n} 种，共 ${m} 种，往下还能滚`,
     rulesLink: '看规则',
   },
@@ -142,10 +147,13 @@ const STR = {
     run: 'Start', runningBtn: 'Filling…', stop: 'Stop', exec: 'Run',
     unitChromeDesc: 'Chrome descriptions', unitEdgeDesc: 'Edge descriptions', unitEdgeTerms: 'Edge search terms', unitFirefoxDesc: 'Firefox descriptions',
     needUnit: 'One step left: pick what to fill', needSetup: 'One step left: add a dashboard link',
+    needCopy: 'One step left: paste your copy',
+    needJsonFix: 'One step left: fix the description JSON first',
     unitNoUrl: 'no link yet', unitNoContent: 'nothing to fill here yet',
     needLocale: 'One step left: pick at least one locale',
     execNote: 'A real browser opens and fills one item at a time; it stays open — review, then submit yourself.',
     execNoteTip: 'Edge needs ≥250 characters per description; Firefox (AMO) caps each at 15,000 characters and saves directly; Chrome and Edge only write drafts.',
+    amoLiveWarn: 'Firefox (AMO) descriptions go live the moment they are saved — the store page changes right away. Submitting for review is a separate step.',
     allUnits: (n: number) => `all ${n} items`,
     willFill: (items: string, n: number) => `This run will fill: ${items} (${n} locales)`,
     willFillNone: 'This run will fill: nothing yet — each box above says why',
@@ -165,10 +173,10 @@ const STR = {
     termsDropped: (n: number) => `Dropped ${n} term(s) that broke the rules (too many / too long).`,
     termsSample: 'Load sample', termsSampleLoaded: 'Search-term sample loaded', termsSampleBusy: 'The terms box already has content — clear it first.',
     termsImported: 'Search terms imported from file', termsClearConfirm: 'Clear these search terms? You can import them from a file again.',
-    localesTitle: 'Locales · check to fill', mShort: '<250',
+    localesTitle: 'Locales · check to fill', mShort: '<250', mLong: 'too long',
     effOn: (n: number, m: number) => `${n} / ${m} on`, selAll: 'All', selNone: 'None',
     localeEmpty: 'Add copy above, then pick which locales this run fills (all on by default).',
-    legendReady: 'will fill', legendSkip: 'too short, skipped', legendNa: 'store not selected',
+    legendReady: 'will fill', legendSkip: 'too short, skipped', legendLong: 'too long, skipped', legendNa: 'store not selected',
     locHidden: (n: number, m: number) => `showing ${n} of ${m} — scroll for more`,
     rulesLink: 'See the rules',
   },
@@ -298,14 +306,20 @@ export default function App() {
 
   // 把当前链接、描述、搜索词写盘到【当前项目】。带上项目名：切换项目瞬间残留的防抖保存会被
   // 服务端按名拒掉，避免 A 项目的文案串写进 B（见 server /save）。返回服务端结果，调用方检查 ok。
-  const persist = (): Promise<SaveResult> => fetch('/save', {
+  // manual=true 只给用户亲手按「立即写盘」用：服务端据此决定要不要往运行日志里记一行。
+  const persist = (manual = false): Promise<SaveResult> => fetch('/save', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      project: active,
+      project: active, manual,
       chromeEditUrl: chromeUrl.trim(), edgeListingsUrl: edgeUrl.trim(), firefoxEditUrl: firefoxUrl.trim(),
       copy, terms,
     }),
-  }).then((r) => r.json()).then((j: SaveResult) => { if (j && j.ok) setSavedAt(clock()); return j; });
+  }).then((r) => r.json()).then((j: SaveResult) => {
+    // 保存时间用服务端给的（文件在盘上的真实时刻）：本机时钟和浏览器时钟未必一致，
+    // 自己编一个时间戳，显示的是「我以为的保存时刻」，不是「文件真的写下的时刻」。
+    if (j && j.ok) setSavedAt(j.savedAt || clock());
+    return j;
+  });
 
   // 写盘成功的那一刻要能在屏上报出来（「已保存 · 19:21:58」），而不是空喊一句「改动自动保存」。
   const clock = () => new Date().toTimeString().slice(0, 8);
@@ -322,6 +336,9 @@ export default function App() {
       setFirefoxUrl(s.firefoxEditUrl || '');
       setCopy(s.copy || '');
       setTerms(s.terms || '');
+      // 载入时就把「盘上最后一次写于何时」摆出来：重新打开控制台不该显示「还没保存过」——
+      // 用户的文案确实在盘上，说没存过会让人以为白填了。
+      setSavedAt(s.savedAt || '');
       loadedRef.current = true;
       setLoaded(true);
     } catch {
@@ -362,7 +379,9 @@ export default function App() {
           }
           maxSeqRef.current = d.seq;
         }
-        const ts = new Date().toTimeString().slice(0, 8);
+        // 时间戳用服务端给的「事情真正发生的时刻」；拿不到才退回本机当前时间。
+        // 以前一律用收到消息的时刻：重放历史日志时全屏都是「打开页面那一秒」。
+        const ts = d.ts || new Date().toTimeString().slice(0, 8);
         // 分色优先看文案表的级别；表外的行（异常原文、第三方输出）才落到中文关键词兜底
         const cls = logLevelOf(d.msg) ?? classify(d.msg);
         if (cls === 'err') runErrRef.current = true; // 不依赖 runningRef：新开页面时重放的错误行先于状态帧到达，也要计入
@@ -520,14 +539,16 @@ export default function App() {
     try { await navigator.clipboard.writeText(text); message.success(t.logsCopied); }
     catch { message.error(t.logsCopyFail); }
   };
-  const persistChecked = async (): Promise<boolean> => {
+  const persistChecked = async (manual = false): Promise<boolean> => {
     try {
-      const r = await persist();
+      const r = await persist(manual);
       if (!r.ok) { message.error(t.saveRejected(r.error || 'unknown')); return false; }
       return true;
     } catch { message.error(t.saveRejected('network')); return false; }
   };
-  const onSave = async () => { if (await persistChecked()) message.success(t.saved); };
+  // 只有「立即写盘」是用户明确要求的一次保存，才在运行日志里留一行；
+  // 登录/开跑前那次落盘只是顺带的，不该混进运行日志。
+  const onSave = async () => { if (await persistChecked(true)) message.success(t.saved); };
   const onLogin = async () => {
     if (!(await persistChecked())) return;
     await fetch('/login', { method: 'POST' });
@@ -580,9 +601,10 @@ export default function App() {
     locale, native: nativeName(locale), len: descLen.get(locale) ?? 0, hasDesc: descLen.has(locale),
   }));
   const localeStores: LocaleStore[] = [
-    { key: 'chrome', label: 'Chrome', badge: 'C', inScope: effectiveUnits.includes('chrome-desc') },
+    // 上限直接取自 src/selectors.mjs（与填充器用的是同一份数字，不会两处漂移）
+    { key: 'chrome', label: 'Chrome', badge: 'C', inScope: effectiveUnits.includes('chrome-desc'), maxChars: SELECTORS.chrome.descriptionMax },
     { key: 'edge', label: 'Edge', badge: 'E', inScope: effectiveUnits.includes('edge-desc'), minChars: 250 },
-    { key: 'firefox', label: 'Firefox', badge: 'F', inScope: effectiveUnits.includes('firefox-desc') },
+    { key: 'firefox', label: 'Firefox', badge: 'F', inScope: effectiveUnits.includes('firefox-desc'), maxChars: SELECTORS.firefox.descriptionMax },
   ];
   const offSet = new Set(localesOff[active] || []);
   const selectedLocales = copyLocales.filter((l) => !offSet.has(l));
@@ -604,7 +626,17 @@ export default function App() {
   const selectNoneLocales = () => saveLocalesOff({ ...localesOff, [active]: [...copyLocales] });
 
   // 能否开跑：先要有可执行单元；再要求至少选中一种语言（有 copy 语言时）。
-  const runReason = effectiveUnits.length ? (noLocale ? t.needLocale : '') : (anyRunnable ? t.needUnit : t.needSetup);
+  // 提示必须说清【真正卡住的是哪一步】。以前一律说「还差一步：填后台链接」：
+  // 链接早就填好了、只是 JSON 写错时也照样这么说，用户会满屏找那个并不缺的链接。
+  // 最后一档留空：文案合法 + 有链接 ⇒ 对应商店的描述单元一定可跑，anyRunnable 必为真，
+  // 走到这里的情况不存在（真出现了就交给服务端的「没有可填充的目标」兜底），别写一条永远不显示的话。
+  const runReason = effectiveUnits.length
+    ? (noLocale ? t.needLocale : '')
+    : anyRunnable ? t.needUnit
+    : !hasAnyUrl ? t.needSetup
+    : !copy.trim() ? t.needCopy
+    : jsonInvalid ? t.needJsonFix
+    : '';
   const canRun = !runReason;
   const willFillText = effectiveUnits.length
     ? t.willFill(effectiveUnits.length === ALL_UNITS.length ? t.allUnits(effectiveUnits.length)
@@ -613,10 +645,14 @@ export default function App() {
   // U4/U5：跑起来之后，同一个位置从「本次会填」换成实时进度，跑完换成常驻结果条。
   // 读数从日志原文解析（src/runread.mjs），不依赖服务端上报，也不靠 3 秒自隐的 toast。
   const runRead = useMemo(() => readRun(logs.map((l) => l.msg)), [logs]);
-  const pickedUnits = new Set(effectiveUnits);
+  // 这一轮实际跑了哪些项：日志里「收到填充请求：…」写明了。用它而不是「当前可跑的项」——
+  // 后者会随用户改文案而变，改一下文案，上一轮的结果就整个消失（用户以为白跑了）。
+  const runUnits = new Set(runRead.picked.length ? runRead.picked : effectiveUnits);
+  // 用户勾了哪些项：勾选框是勾着的，结果条却说「没选这项」，两处自相矛盾。
+  const userChecked = new Set(units);
   const runTallyText = (() => {
     if (runRead.mode !== 'result') return '';
-    const c = tally(runRead.units.filter((u) => pickedUnits.has(u.key)));
+    const c = tally(runRead.units.filter((u) => runUnits.has(u.key)));
     return [c.stored && t.rStored(c.stored), c.review && t.rHuman(c.review),
       c.skipped && t.rSkipped(c.skipped), c.failed && t.rFailed(c.failed),
       c.running && t.rRunning(c.running), c.pending && t.rPending(c.pending)].filter(Boolean).join(' · ');
@@ -823,7 +859,7 @@ export default function App() {
             onAll={selectAllLocales}
             onNone={selectNoneLocales}
             emptyText={t.localeEmpty}
-            labels={{ on: t.effOn, all: t.selAll, none: t.selNone, short: t.mShort, ready: t.legendReady, skipped: t.legendSkip, notSelected: t.legendNa, hidden: t.locHidden }}
+            labels={{ on: t.effOn, all: t.selAll, none: t.selNone, short: t.mShort, tooLong: t.mLong, ready: t.legendReady, skipped: t.legendSkip, tooLongLegend: t.legendLong, notSelected: t.legendNa, hidden: t.locHidden }}
           />
         </Card>
       </div>
@@ -905,7 +941,10 @@ export default function App() {
             <span className="fd-pills">
               {unitMeta.map((m) => {
                 const u = runRead.units.find((x) => x.key === m.key) || { i: 0, n: 0, filled: 0, human: 0, state: 'pending' };
-                const st = pickedUnits.has(m.key) ? u.state : 'unselected';
+                // 这一轮跑过 → 报这一轮的结果（跑完后再取消勾选也不该改口）。
+                // 没跑过但勾着 → 「没轮到」；连勾都没勾 → 「没选这项」。
+                // 以前一律说「没选这项」，而旁边的勾选框明明是勾着的，用户只会以为界面坏了。
+                const st = runUnits.has(m.key) ? u.state : userChecked.has(m.key) ? 'pending' : 'unselected';
                 return (
                   <span key={m.key} className={`fd-pill s-${st}`}>
                     <span className="pk">{m.label}</span>
@@ -920,6 +959,11 @@ export default function App() {
           <span className="fd-hint">{t.execNote}</span>
           <RulesTip text={t.execNoteTip} label={t.rulesLink} />
         </div>
+        {/* AMO 是唯一一个「存了就生效、不能撤回」的后台：勾了它就把这句摆出来，
+            免得用户以为「检查过再由你提交」等于「现在什么都没存」。只在勾上时出现。 */}
+        {units.includes('firefox-desc') && (
+          <span className="fd-hint warn" style={{ marginTop: 6 }}>{t.amoLiveWarn}</span>
+        )}
       </Card>
 
       {/* 日志 */}

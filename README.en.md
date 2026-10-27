@@ -69,6 +69,7 @@ Keys are locale codes (underscore or hyphen, case-insensitive); values are the f
 - For a line break inside a description, write `\n` (a JSON string can't contain a raw newline).
 - On the dashboard but missing from your copy → skipped (with a note); extra languages in your copy → ignored.
 - **Edge requires ≥250 characters per description**; shorter ones are skipped with a note.
+- **Descriptions have a length cap**: Chrome 16000 characters, AMO 15000. A language over the cap is skipped with a note while **the other languages still get filled** (one long description never aborts the whole run).
 - Save as UTF-8 — with or without a BOM, both parse fine.
 
 ## Search-terms format (`search-terms.json`, Edge only)

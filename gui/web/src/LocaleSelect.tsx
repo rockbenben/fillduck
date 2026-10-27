@@ -12,7 +12,8 @@ export interface LocaleStore {
   label: string;
   badge: string; // C / E / F
   inScope: boolean; // 该商店的描述单元被勾选且条件齐备
-  minChars?: number; // Edge = 250
+  minChars?: number; // Edge = 250（低于此值会被跳过）
+  maxChars?: number; // Chrome = 16000 / AMO = 15000（高于此值会被跳过）
 }
 
 export interface LocaleItem {
@@ -22,9 +23,10 @@ export interface LocaleItem {
   hasDesc: boolean; // 该语言是否有描述文案（仅有搜索词的语言 = false）
 }
 
-type Cell = 'ready' | 'skip' | 'na';
+type Cell = 'ready' | 'skip' | 'toolong' | 'na';
 function cellState(item: LocaleItem, store: LocaleStore): Cell {
   if (!store.inScope || !item.hasDesc) return 'na'; // 商店未选，或该语言无描述可写 → 该格无内容
+  if (store.maxChars && item.len > store.maxChars) return 'toolong'; // 超过该后台的描述上限 → 会被跳过
   if (store.minChars && item.len < store.minChars) return 'skip';
   return 'ready';
 }
@@ -39,8 +41,8 @@ interface Props {
   onNone: () => void;
   emptyText: string;
   labels: {
-    on: (n: number, m: number) => string; all: string; none: string; short: string;
-    ready: string; skipped: string; notSelected: string; hidden: (shown: number, total: number) => string;
+    on: (n: number, m: number) => string; all: string; none: string; short: string; tooLong: string;
+    ready: string; skipped: string; tooLongLegend: string; notSelected: string; hidden: (shown: number, total: number) => string;
   };
 }
 
@@ -97,6 +99,7 @@ export default function LocaleSelect({ items, stores, selected, disabled, onTogg
         <span className="fd-legend">
           <span><i className="k ready" />{labels.ready}</span>
           <span><i className="k skip" />{labels.skipped}</span>
+          <span><i className="k toolong" />{labels.tooLongLegend}</span>
           <span><i className="k na" />{labels.notSelected}</span>
         </span>
         <span className="dots">
@@ -110,12 +113,14 @@ export default function LocaleSelect({ items, stores, selected, disabled, onTogg
           {items.map((it) => {
             const on = selected.has(it.locale);
             const skips = stores.some((s) => cellState(it, s) === 'skip');
+            const tooLong = stores.some((s) => cellState(it, s) === 'toolong');
             return (
               <label key={it.locale} className={`fd-loc${on ? '' : ' off'}`}>
                 <Checkbox checked={on} disabled={disabled} tabIndex={-1} aria-label={`${it.native} (${it.locale})`} onChange={() => onToggle(it.locale)} />
                 <span className="name">{it.native}</span>
                 <span className="code">{it.locale}</span>
                 {skips && <span className="short">{labels.short}</span>}
+                {tooLong && <span className="short">{labels.tooLong}</span>}
                 {/* 三点区承载的是「会写进哪些商店」，不是开关：整行 label 会把它变成误触代价很高的按钮 */}
                 <span className="dots" aria-hidden="true">
                   {stores.map((s) => (

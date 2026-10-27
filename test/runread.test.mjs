@@ -112,3 +112,54 @@ test('上一轮的收尾不算这一轮的结果', () => {
   assert.equal(byKey(r)['chrome-desc'].state, 'running');
   assert.equal(byKey(r)['chrome-desc'].filled, 0);
 });
+
+// 还没开跑过：日志里只有「已保存」「已切换项目」这类杂音。以前这些杂音会被当成「运行中」，
+// 于是用户点「开始填充」之前，界面就显示「进行中」，还把「本次会填」那句预览挤掉了。
+test('没开跑过时是 idle，不是进行中', () => {
+  const r = readRun([
+    '已保存链接、描述与搜索词。',
+    '已新建项目「我的扩展」并切换。',
+    '已保存链接、描述与搜索词。',
+  ]);
+  assert.equal(r.mode, 'idle');
+  assert.deepEqual(r.picked, []);
+});
+
+// 这一轮跑了哪些项，以日志里「收到填充请求：…」为准：界面上的勾选随时会变，
+// 拿它反推会在用户改一下文案后把上一轮的结果整个抹掉。
+test('picked 记下这一轮实际点了哪些项', () => {
+  const r = readRun([
+    '收到填充请求：chrome-desc + edge-desc',
+    '打开 Chrome 后台…',
+    '✅ 完成。请在浏览器里人工检查后提交。',
+  ]);
+  assert.deepEqual(r.picked, ['chrome-desc', 'edge-desc']);
+  // 后一轮只跑了一项 → picked 只剩后一轮
+  const r2 = readRun([
+    '收到填充请求：chrome-desc + edge-desc',
+    '✅ 完成。请在浏览器里人工检查后提交。',
+    '收到填充请求：firefox-desc',
+    '⏹ 已停止（已填的部分保留）。',
+  ]);
+  assert.deepEqual(r2.picked, ['firefox-desc']);
+});
+
+// doRun 提前返回时说的两句也是「这一轮结束了」的凭据：漏认就永远停在「进行中」。
+test('提前返回的两句收尾语也会结束这一轮', () => {
+  assert.equal(readRun(['收到填充请求：(空)', '⚠️ 没有选中任何执行目标。']).mode, 'result');
+  assert.equal(readRun(['收到填充请求：chrome-desc', '⚠️ 没有可填的内容：描述与搜索词都为空或有误。']).mode, 'result');
+});
+
+// 「打开 X 后台…」先记了 running，随后才判定这一项一种都填不了 —— skipped 才是最终结论，
+// 结果条必须显示「已跳过」而不是「准备中」（排错了就像是一直在跑）。
+test('一种都填不了时，状态落在 skipped 而不是 running', () => {
+  const r = readRun([
+    '收到填充请求：chrome-desc',
+    '打开 Chrome 后台…',
+    'Chrome 跳过 en：超过 16000 字符上限',
+    'Chrome：没有可填的语言——全都超过了 16000 字符上限。',
+    '✅ 完成。请在浏览器里人工检查后提交。',
+  ]);
+  assert.equal(r.mode, 'result');
+  assert.equal(byKey(r)['chrome-desc'].state, 'skipped');
+});

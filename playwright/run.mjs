@@ -12,7 +12,7 @@
 // 配置与文案在 projects/<项目名>/ 下（config.json / descriptions.json / search-terms.json）。
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseInput, parseTerms } from '../src/core.mjs';
+import { parseInput, parseTerms, explainError } from '../src/core.mjs';
 import { migrateIfNeeded, getActive, listProjects, projectPaths, readJsonSafe, readTextSafe } from '../src/projects.mjs';
 import { launchPersistent } from './browser.mjs';
 import { fillChrome } from './fill-chrome.mjs';
@@ -107,7 +107,7 @@ async function main() {
     catch (e) {
       if (store !== 'all') throw e;
       failures.push(name);
-      log(`❌ ${name} 出错：${e.message}（继续跑其余目标）`);
+      log(`❌ ${name} 出错：${explainError(e).text}（继续跑其余目标）`);
     }
   };
   // 缺链接的处理分两种：单选该目标 = 配置错误，显式抛错；--store all = 没配就跳过
@@ -144,7 +144,7 @@ async function main() {
     if (failures.length) log(`完成，但这些目标出错需重跑：${failures.join('、')}。浏览器保持打开，请检查现场。`);
     else log('全部完成。浏览器保持打开，请人工检查后提交。检查完手动关闭或按 Ctrl+C。');
   } catch (e) {
-    log('出错：' + e.message);
+    log('出错：' + explainError(e).text);
     log('浏览器保持打开，方便你看现场。修好后重跑。');
   }
   await new Promise(() => {}); // 不自动关，留给用户检查

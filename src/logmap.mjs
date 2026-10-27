@@ -39,7 +39,57 @@ const TERM_RE = new RegExp(TERMS.map(([zh]) => zh.replace(/[.*+?^${}()|[\]\\]/g,
 const TERM_EN = new Map(TERMS);
 export function translateTerms(s) {
   // 「、」是服务端拼目标列表用的中文顿号，英文行里留着它也算漏网的中文
-  return s.replace(TERM_RE, (zh) => TERM_EN.get(zh)).replace(/、/g, ', ');
+  let out = s.replace(TERM_RE, (zh) => TERM_EN.get(zh)).replace(/、/g, ', ');
+  // 失败原因里那几句人话 + 「技术细节」：它们会被塞进各种句子的括号里（中断原因、没存成原因），
+  // 所以必须整行都能替，不能只替「❌ … 出错：」那一行的正文。
+  for (const [zh, en] of PLAIN_SENTENCES) out = out.split(zh).join(en);
+  out = out.replace(/。技术细节：/g, '. Technical detail: ');
+  // 全角括号换成半角：英文行里留「（）」是中文标点（如「ja（日语）」这种语言名标签）。
+  out = out.replace(/（/g, '(').replace(/）/g, ')');
+  return out;
+}
+
+// 失败原因整句也是中文：英文界面里 "failed:" 后面跟一整段中文，等于既没说出了什么事、
+// 也不知道该改哪里。只译「用户照着能改」的那几条；深度诊断串（fill-edge 的 describeMismatch）
+// 是发给维护者逐字看的，仍保留中文。
+const ERROR_BODIES = [
+  [/^没等到 Chrome 的语言下拉。/, () => 'The Chrome language dropdown never appeared.'],
+  [/^没等到语言列表（(.+?)）。/, (m) => `The language list never appeared (${m[1]}).`],
+  [/^没等到 AMO 的「描述附加组件」区块。/, () => 'The AMO "Description" section never appeared.'],
+  [/^“保存草稿”未能点击，已填内容尚未保存，请人工保存或重跑$/, () => 'The "Save draft" button could not be clicked — what was filled is not saved yet; save it by hand or rerun.'],
+  [/^没找到“保存草稿”按钮，已填内容尚未保存，请人工保存$/, () => 'The "Save draft" button was not found — what was filled is not saved yet; save it by hand.'],
+  [/^浏览器 profile 被占用：上次的浏览器没关干净。请关掉本工具开的所有浏览器窗口（或结束残留的 node\/chrome\/msedge 进程）后重试。$/, () => 'The browser profile is in use — the last browser was not closed. Close every browser this tool opened (or end the leftover node/chrome/msedge processes) and try again.'],
+  [/^启动浏览器失败：(.+?)（确认已装 Chrome\/Edge，或运行：npx playwright install chromium）$/, (m) => `Could not start the browser: ${m[1]} (make sure Chrome/Edge is installed, or run: npx playwright install chromium)`],
+];
+// 失败原因里那几句人话：它们会被塞进各种小结句里，所以不锚定行首、整句替换。
+const PLAIN_SENTENCES = [
+  ['后台页面没按预期响应（可能没登录、或页面卡住了）', 'the dashboard page did not respond as expected (maybe you are not signed in, or the page is stuck)'],
+  ['页面上没找到要操作的那个元素（后台可能改版了，或这一步没加载出来）', 'the element to work with was not found on the page (the dashboard may have changed, or that step did not load)'],
+  ['连不上后台页面（网络不通，或地址不对）', 'could not reach the dashboard page (no network, or the address is wrong)'],
+  ['浏览器窗口被关掉了', 'the browser window was closed'],
+  ['这一步没能完成', 'that step could not be completed'],
+];
+// 每条错误后面那三句「请检查：①…②…③…」同样是中文。
+// 译文前面留一个空格：中文里「。」本身就是句号，英文里还要靠空格断句。
+const ERROR_HINTS = [
+  ['请检查：① 链接是 …/edit 结尾的商店列表编辑页；② 已登录 Google；③ 网络正常。',
+    ' Check: ① the link ends with …/edit (the store listing editor) ② you are signed in to Google ③ the network is fine.'],
+  ['请检查：① 链接是 …/listings 结尾的页面；② 已登录 Microsoft；③ 网络正常。',
+    ' Check: ① the link ends with …/listings ② you are signed in to Microsoft ③ the network is fine.'],
+  ['请检查：① 链接是 …/developers/addon/<名>/edit；② 已登录 Mozilla 账号；③ 网络正常。',
+    ' Check: ① the link looks like …/developers/addon/<name>/edit ② you are signed in to Mozilla ③ the network is fine.'],
+];
+export function translateError(s) {
+  let out = s;
+  for (const [zh, en] of ERROR_HINTS) out = out.split(zh).join(en);
+  for (const [zh, en] of PLAIN_SENTENCES) out = out.split(zh).join(en);
+  // 「。技术细节：xxx」→「. Technical detail: xxx」
+  out = out.replace(/。技术细节：/g, '. Technical detail: ');
+  for (const [re, en] of ERROR_BODIES) {
+    const m = re.exec(out);
+    if (m) { out = out.replace(re, typeof en === 'function' ? en(m) : en); break; }
+  }
+  return out;
 }
 
 export const LOG_PATTERNS = [
@@ -55,7 +105,7 @@ export const LOG_PATTERNS = [
 
   P(/^⏹ 收到停止请求，完成当前这一项后停下…$/, 'warn', () => '⏹ Stop requested — finishing the current item, then stopping…'),
   P(/^⚠️ 没有可填的内容：描述与搜索词都为空或有误。$/, 'warn', () => '⚠️ Nothing to fill: both the descriptions and the search terms are empty or invalid.'),
-  P(/^❌ (.+?) 出错：(.+?)（继续跑其余目标）$/, 'err', (m) => `❌ ${m[1]} failed: ${m[2]} (other targets continue)`),
+  P(/^❌ (.+?) 出错：(.+?)（继续跑其余目标）$/, 'err', (m) => `❌ ${m[1]} failed: ${translateError(m[2])} (other targets continue)`),
   // —— 一轮任务的开始与收尾 ——
   P(/^收到填充请求：(.+)$/, '', (m) => `Run requested: ${m[1]}`),
   P(/^项目：(.+)$/, '', (m) => `Project: ${m[1]}`),
@@ -67,7 +117,7 @@ export const LOG_PATTERNS = [
   P(/^❌ 全部目标都出错，本次没有填充任何内容：(.+?)（浏览器保留现场）$/, 'err', (m) => `❌ Every target failed, nothing was filled: ${m[1]} (browser left open)`),
   P(/^⚠️ 完成，但这些目标出错需重跑：(.+?)（浏览器保留现场）$/, 'warn', (m) => `⚠️ Done, but these need a retry: ${m[1]} (browser left open)`),
   P(/^✅ 完成。请在浏览器里人工检查后提交。$/, 'ok', () => '✅ Done. Check it in the browser, then submit.'),
-  P(/^❌ 出错：(.+?)（浏览器保留现场，修好后重跑）$/, 'err', (m) => `❌ Error: ${m[1]} (browser left open — fix and rerun)`),
+  P(/^❌ 出错：(.+?)（浏览器保留现场，修好后重跑）$/, 'err', (m) => `❌ Error: ${translateError(m[1])} (browser left open — fix and rerun)`),
 
   // —— 项目与保存 ——
   P(/^忽略一次过期保存（来自项目「(.+?)」，当前是「(.+?)」）。$/, 'warn', (m) => `Ignored a stale save (from project "${m[1]}", current is "${m[2]}").`),
@@ -89,10 +139,14 @@ export const LOG_PATTERNS = [
   P(/^重开 Edge 后台（清理上一步残留）…$/, '', () => 'Reopening the Edge dashboard (clearing leftovers)…'),
 
   // —— Chrome 填充 ——
-  P(/^Chrome 界面非中\/英，强制英文重载…$/, 'warn', () => 'Chrome UI is neither Chinese nor English — reloading in English…'),
+  P(/^没找到 Chrome 后台界面（可能没登录 Google、界面不是中英、或链接不对），先用英文界面重载再试…$/, 'warn', () => 'Chrome dashboard not found (maybe not signed in to Google, the UI is not Chinese/English, or the link is wrong) — retrying in English…'),
   P(/^Chrome 界面语言：(.+)$/, '', (m) => `Chrome UI language: ${m[1] === '中文' ? 'Chinese' : 'English'}`),
   P(/^Chrome 忽略\(无此语言\)：(.+)$/, 'warn', (m) => `Chrome ignored (not offered there): ${m[1]}`),
   P(/^Chrome 缺文案，跳过：(.+)$/, 'warn', (m) => `Chrome missing copy, skipped: ${m[1]}`),
+  P(/^Chrome 跳过 (.+?)：超过 (\d+) 字符上限$/, 'warn', (m) => `Chrome skipped ${m[1]}: over the ${m[2]}-character limit`),
+  P(/^Chrome：没有可填的语言——全都超过了 (\d+) 字符上限。$/, 'warn', (m) => `Chrome: nothing to fill — every locale is over the ${m[1]}-character limit`),
+  P(/^Chrome：没有可填的语言。$/, 'warn', () => 'Chrome: nothing to fill.'),
+  P(/^Chrome：可填 (\d+) 种（另有 (\d+) 种超长已跳过）$/, 'warn', (m) => `Chrome: filling ${m[1]} languages (${m[2]} skipped as too long)`),
   P(/^⚠️ Chrome 已填 (\d+) 种但“保存草稿”没点上——请去浏览器里手动点击保存，否则关掉浏览器就没了！$/, 'warn', (m) => `⚠️ Chrome: ${m[1]} filled but the draft was NOT saved — save it by hand in the browser, or closing the window throws it away!`),
   P(/^⚠️ Chrome 已填 (\d+) 种，但没找到“保存草稿”按钮，请手动点击保存，否则草稿不会保存。$/, 'warn', (m) => `⚠️ Chrome: ${m[1]} filled, but no "Save draft" button was found — save it manually or the draft is lost.`),
   P(/^⚠️ Chrome 这些语言填进去了但没稳住，请逐个检查：(.+)$/, 'warn', (m) => `⚠️ Chrome: the text did not stick for these — check one by one: ${m[1]}`),
@@ -110,7 +164,7 @@ export const LOG_PATTERNS = [
   P(/^Chrome (\d+)\/(\d+)：(.+)$/, '', (m) => `Chrome ${m[1]}/${m[2]}: ${m[3]}`),
 
   // —— Edge 描述 ——
-  P(/^Edge 界面非中\/英，强制英文重载…$/, 'warn', () => 'Edge UI is neither Chinese nor English — reloading in English…'),
+  P(/^没找到 Edge 后台界面（可能没登录 Microsoft、界面不是中英、或链接不对），先用英文界面重载再试…$/, 'warn', () => 'Edge dashboard not found (maybe not signed in to Microsoft, the UI is not Chinese/English, or the link is wrong) — retrying in English…'),
   P(/^(.+?)：界面语言 (.+)$/, '', (m) => `${m[1]}: UI language ${m[2] === '中文' ? 'Chinese' : 'English'}`),
   P(/^⚠️ Edge 上这些语言尚未收录、已跳过：(.+?)（发我一句即可加上）$/, 'warn', (m) => `⚠️ Edge does not list these languages yet, skipped: ${m[1]} (tell me and I will add them)`),
   P(/^(.*?)忽略\(无此语言\)：(.+)$/, 'warn', (m) => `${m[1]}ignored (not offered there): ${m[2]}`),

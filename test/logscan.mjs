@@ -158,6 +158,22 @@ function variantsOf(arg) {
 
 export const sourceText = SOURCES.map((rel) => readFileSync(path.join(ROOT, rel), 'utf8')).join('\n');
 
+// 扫源码里「把原始异常直接当失败原因给用户看」的写法：日志或失败原因里直接拼 e.message。
+// 失败时用户看到的应该是 explainError 给出的人话，而不是内部选择器与超时毫秒数。
+// 各闸按自己守的那一半文件调用（填充脚本一份、服务端一份），共用这一个判据。
+export function scanRawErrorReasons(files) {
+  const bad = [];
+  for (const rel of files) {
+    const src = readFileSync(path.join(ROOT, rel), 'utf8');
+    src.split('\n').forEach((line, i) => {
+      const usesRaw = /(\be|err)\.message\b/.test(line) && !/explainError/.test(line);
+      const becomesReason = /\blog\(/.test(line) || /=\s*'error/.test(line);
+      if (usesRaw && becomesReason) bad.push(`${rel}:${i + 1} ${line.trim()}`);
+    });
+  }
+  return bad;
+}
+
 export const samples = [];
 // 含中文却一条形态都没解析出来的实参 = 解析器被绕过了（嵌套三元曾被这样吞掉三条）
 export const unparsed = [];
